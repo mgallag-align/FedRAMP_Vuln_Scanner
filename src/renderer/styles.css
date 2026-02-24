@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom application styles */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  height: 100vh;
+}
+
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Stepper styles */
+.stepper-step {
+  @apply flex items-center;
+}
+
+.stepper-step-active {
+  @apply text-fedramp-blue font-bold;
+}
+
+.stepper-step-completed {
+  @apply text-green-600;
+}
+
+.stepper-step-pending {
+  @apply text-gray-400;
+}
+
+/* Drop zone */
+.drop-zone {
+  @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer transition-colors;
+}
+
+.drop-zone:hover,
+.drop-zone-active {
+  @apply border-fedramp-blue bg-blue-50;
+}
+
+/* Flag badges */
+.flag-green {
+  @apply inline-block w-3 h-3 rounded-full bg-green-500;
+}
+
+.flag-orange {
+  @apply inline-block w-3 h-3 rounded-full bg-orange-500;
+}
+
+.flag-red {
+  @apply inline-block w-3 h-3 rounded-full bg-red-500;
+}
+
+.flag-yellow {
+  @apply inline-block w-3 h-3 rounded-full bg-yellow-400;
+}
+
+/* Review table */
+.review-table {
+  @apply w-full text-sm;
+}
+
+.review-table th {
+  @apply px-3 py-2 text-left bg-fedramp-blue text-white font-medium sticky top-0 z-10;
+}
+
+.review-table td {
+  @apply px-3 py-2 border-b border-gray-200;
+}
+
+.review-table tr:hover td {
+  @apply bg-blue-50;
+}
+
+/* Warning banner */
+.warning-banner {
+  @apply bg-orange-100 border-l-4 border-orange-500 text-orange-700 p-3 mb-3 rounded;
+}
+
+/* Error banner */
+.error-banner {
+  @apply bg-red-100 border-l-4 border-red-500 text-red-700 p-3 mb-3 rounded;
+}
+
+/* Success banner */
+.success-banner {
+  @apply bg-green-100 border-l-4 border-green-500 text-green-700 p-3 mb-3 rounded;
+}
+
+/* Scanner badge */
+.scanner-badge {
+  @apply inline-block px-2 py-0.5 rounded text-xs font-medium;
+}
+
+.scanner-badge-nessus {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.scanner-badge-qualys {
+  @apply bg-purple-100 text-purple-800;
+}
+
+.scanner-badge-rapid7 {
+  @apply bg-green-100 text-green-800;
+}
+
+.scanner-badge-prisma {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.scanner-badge-scap {
+  @apply bg-red-100 text-red-800;
+}
+
+.scanner-badge-csv {
+  @apply bg-gray-100 text-gray-800;
+}
+
+/* Progress bar */
+.progress-bar-track {
+  @apply w-full h-2 bg-gray-200 rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-fedramp-blue rounded-full transition-all duration-300;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-400 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-500;
+}
