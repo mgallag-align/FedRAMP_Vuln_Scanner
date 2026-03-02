@@ -134,6 +134,59 @@ const useStore = create((set, get) => ({
       return { findings: deduped };
     }),
 
+  // ── Vulnerability Mapper ──
+  mapperView: false,
+  setMapperView: (show) => set({ mapperView: show }),
+
+  mapperSourceFile: null, // { name, path, headers, rows, totalRows }
+  setMapperSourceFile: (data) => set({ mapperSourceFile: data }),
+
+  mapperMappings: {}, // { targetField: sourceField }
+  setMapperMappings: (mappings) => set({ mapperMappings: mappings }),
+  setMapperMapping: (target, source) =>
+    set((state) => ({
+      mapperMappings: { ...state.mapperMappings, [target]: source },
+    })),
+  removeMapperMapping: (target) =>
+    set((state) => {
+      const next = { ...state.mapperMappings };
+      delete next[target];
+      return { mapperMappings: next };
+    }),
+  clearMapperMappings: () => set({ mapperMappings: {} }),
+
+  mapperTemplates: JSON.parse(localStorage.getItem('mapperTemplates') || '[]'),
+  saveMapperTemplate: (template) =>
+    set((state) => {
+      const existing = state.mapperTemplates.filter((t) => t.name !== template.name);
+      const updated = [...existing, template];
+      localStorage.setItem('mapperTemplates', JSON.stringify(updated));
+      return { mapperTemplates: updated };
+    }),
+  deleteMapperTemplate: (name) =>
+    set((state) => {
+      const updated = state.mapperTemplates.filter((t) => t.name !== name);
+      localStorage.setItem('mapperTemplates', JSON.stringify(updated));
+      return { mapperTemplates: updated };
+    }),
+  loadMapperTemplate: (name) => {
+    const state = get();
+    const template = state.mapperTemplates.find((t) => t.name === name);
+    if (template) {
+      set({ mapperMappings: { ...template.mappings } });
+    }
+  },
+
+  mapperTransformedRows: [],
+  setMapperTransformedRows: (rows) => set({ mapperTransformedRows: rows }),
+
+  resetMapper: () =>
+    set({
+      mapperSourceFile: null,
+      mapperMappings: {},
+      mapperTransformedRows: [],
+    }),
+
   // ── Reset ──
   resetSession: () =>
     set({
