@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { detectAndParse } = require('../parsers/index');
 const { parseIIW } = require('../parsers/iiw');
+const { parseUniversalFile, applyMapping } = require('../parsers/universal-parser');
 const { matchAssets } = require('../engine/matcher');
 const { generateIds } = require('../engine/id-generator');
 const { validateExport } = require('../engine/validator');
@@ -98,6 +99,59 @@ function registerIpcHandlers() {
         sendProgress('Exporting RET workbook...', pct);
       });
       sendProgress('Export complete.', 100);
+      return { success: true, path: outputPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Universal Mapper: Parse file and extract headers + rows ──
+  ipcMain.handle('mapper:parse-file', async (event, filePath, fileName) => {
+    try {
+      sendProgress(`Reading ${fileName}...`, 0);
+      const content = fs.readFileSync(filePath);
+      sendProgress(`Parsing ${fileName}...`, 30);
+      const result = await parseUniversalFile(content, fileName);
+      sendProgress(`Parsed ${fileName}: ${result.totalRows} rows`, 100);
+      return result;
+    } catch (err) {
+      return { error: err.message, headers: [], rows: [], totalRows: 0 };
+    }
+  });
+
+  // ── Universal Mapper: Apply mapping and transform data ──
+  ipcMain.handle('mapper:apply-mapping', async (event, rows, mapping, defaults) => {
+    try {
+      return { rows: applyMapping(rows, mapping, defaults) };
+    } catch (err) {
+      return { error: err.message, rows: [] };
+    }
+  });
+
+  // ── Universal Mapper: Export mapped data as CSV ──
+  ipcMain.handle('mapper:export-csv', async (event, mappedRows, outputPath) => {
+    try {
+      if (!mappedRows || mappedRows.length === 0) {
+        return { success: false, error: 'No data to export' };
+      }
+      const headers = Object.keys(mappedRows[0]);
+      const csvLines = [
+        headers.map((h) => `"${h}"`).join(','),
+        ...mappedRows.map((row) =>
+          headers.map((h) => `"${String(row[h] || '').replace(/"/g, '""')}"`).join(',')
+        ),
+      ];
+      fs.writeFileSync(outputPath, csvLines.join('\n'), 'utf-8');
+      return { success: true, path: outputPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ── Universal Mapper: Export mapped data as JSON ──
+  ipcMain.handle('mapper:export-json', async (event, mappedRows, outputPath) => {
+    try {
+      fs.writeFileSync(outputPath, JSON.stringify(mappedRows, null, 2), 'utf-8');
       return { success: true, path: outputPath };
     } catch (err) {
       return { success: false, error: err.message };

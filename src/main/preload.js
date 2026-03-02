@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Export
   exportRET: (sessionData, outputPath) => ipcRenderer.invoke('export:ret', sessionData, outputPath),
 
+  // Universal Mapper
+  mapperParseFile: (filePath, fileName) => ipcRenderer.invoke('mapper:parse-file', filePath, fileName),
+  mapperApplyMapping: (rows, mapping, defaults) => ipcRenderer.invoke('mapper:apply-mapping', rows, mapping, defaults),
+  mapperExportCSV: (mappedRows, outputPath) => ipcRenderer.invoke('mapper:export-csv', mappedRows, outputPath),
+  mapperExportJSON: (mappedRows, outputPath) => ipcRenderer.invoke('mapper:export-json', mappedRows, outputPath),
+
   // Progress events
   onProgress: (callback) => {
     const subscription = (event, data) => callback(data);
