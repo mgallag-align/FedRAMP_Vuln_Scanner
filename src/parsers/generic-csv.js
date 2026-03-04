@@ -1,6 +1,13 @@
 const { parse: csvParse } = require('csv-parse/sync');
 const { v4: uuidv4 } = require('uuid');
 
+/**
+ * Strip UTF-8 BOM if present.
+ */
+function stripBOM(str) {
+  return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
+}
+
 // Known Rapid7 CSV header patterns
 const RAPID7_HEADERS = ['asset ip address', 'vulnerability title'];
 
@@ -22,6 +29,7 @@ function mapCVSStoRisk(cvss) {
  * Returns { type: 'rapid7'|'unknown', headers: string[], mapping?: object }
  */
 async function detectCSVFormat(csvContent) {
+  csvContent = stripBOM(csvContent);
   const records = csvParse(csvContent, {
     columns: true,
     skip_empty_lines: true,
@@ -53,6 +61,7 @@ async function detectCSVFormat(csvContent) {
  * mapping: { asset_identifier: 'CSV Column', weakness_name: 'CSV Column', ... }
  */
 async function parseGenericCSV(csvContent, fileName, mapping, onProgress) {
+  csvContent = stripBOM(csvContent);
   const records = csvParse(csvContent, {
     columns: true,
     skip_empty_lines: true,

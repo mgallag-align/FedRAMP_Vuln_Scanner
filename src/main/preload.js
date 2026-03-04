@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Parsing operations (run in main process / worker)
   parseScanFile: (filePath, fileName) => ipcRenderer.invoke('parse:scan-file', filePath, fileName),
+  parseScanFileWithMapping: (filePath, fileName, mapping) => ipcRenderer.invoke('parse:scan-file-with-mapping', filePath, fileName, mapping),
   parseIIW: (filePath) => ipcRenderer.invoke('parse:iiw', filePath),
 
   // Engine operations

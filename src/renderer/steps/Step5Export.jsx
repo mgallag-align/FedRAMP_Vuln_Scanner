@@ -12,6 +12,8 @@ export default function Step5Export() {
   const prevStep = useStore((s) => s.prevStep);
 
   const [validationErrors, setValidationErrors] = useState([]);
+  const [validationWarnings, setValidationWarnings] = useState([]);
+  const [overrideWarnings, setOverrideWarnings] = useState(false);
   const [exportStatus, setExportStatus] = useState(null); // null | 'exporting' | 'success' | 'error'
   const [exportPath, setExportPath] = useState('');
   const [exportError, setExportError] = useState('');
@@ -30,10 +32,14 @@ export default function Step5Export() {
 
     window.electronAPI.validateExport(sessionData).then((result) => {
       setValidationErrors(result.errors || []);
+      setValidationWarnings(result.warnings || []);
+      setOverrideWarnings(false);
     });
   }, [findings, systemInfo, iiwAssets, scanFiles, unauthAcknowledged]);
 
-  const canExport = validationErrors.length === 0;
+  const hasErrors = validationErrors.length > 0;
+  const hasWarnings = validationWarnings.length > 0;
+  const canExport = !hasErrors && (!hasWarnings || overrideWarnings);
 
   const handleExport = useCallback(async () => {
     // Default filename
@@ -130,15 +136,40 @@ export default function Step5Export() {
         </div>
       </div>
 
-      {/* Validation errors */}
-      {validationErrors.length > 0 && (
+      {/* Validation errors (blocking) */}
+      {hasErrors && (
         <div className="error-banner mb-6">
           <p className="font-medium mb-2">Export blocked — resolve these issues:</p>
           <ul className="list-disc list-inside text-sm space-y-1">
             {validationErrors.map((err, idx) => (
-              <li key={idx}>{err.message}</li>
+              <li key={idx}><span className="font-semibold">[{err.code}]</span> {err.message}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Validation warnings (overridable) */}
+      {hasWarnings && (
+        <div className="warning-banner mb-6">
+          <p className="font-medium mb-2">Warnings — export can proceed with override:</p>
+          <ul className="list-disc list-inside text-sm space-y-1">
+            {validationWarnings.map((warn, idx) => (
+              <li key={idx}><span className="font-semibold">[{warn.code}]</span> {warn.message}</li>
+            ))}
+          </ul>
+          {!hasErrors && (
+            <label className="flex items-center gap-2 mt-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={overrideWarnings}
+                onChange={(e) => setOverrideWarnings(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm font-medium">
+                I acknowledge these warnings and want to export anyway
+              </span>
+            </label>
+          )}
         </div>
       )}
 

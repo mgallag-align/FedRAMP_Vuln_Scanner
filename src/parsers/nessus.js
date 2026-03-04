@@ -26,12 +26,13 @@ async function parseNessus(xmlContent, fileName, onProgress) {
   const result = await parser.parseStringPromise(xmlContent);
 
   const findings = [];
+  const authStatusByHost = new Map(); // hostname → true/false
   const root = result.NessusClientData_v2;
-  if (!root || !root.Report) return findings;
+  if (!root || !root.Report) return { findings, authStatusByHost };
 
   const report = root.Report;
   let hosts = report.ReportHost;
-  if (!hosts) return findings;
+  if (!hosts) return { findings, authStatusByHost };
   if (!Array.isArray(hosts)) hosts = [hosts];
 
   // Extract scan start time from preferences if available
@@ -66,6 +67,100 @@ async function parseNessus(xmlContent, fileName, onProgress) {
     if (!items) continue;
     if (!Array.isArray(items)) items = [items];
 
+    // ── Multi-layer credential detection (per-host) ──
+    // Tier 1 (Primary): Credentialed_Scan tag in <HostProperties>
+    // Tier 2 (Secondary): Plugin 19506 (Nessus Scan Information) → "Credentialed checks : yes/no"
+    // Tier 3 (Tertiary): Failure/success indicator plugins (21745, 104410, 110385)
+    let hostAuthenticated = null;
+    let authConfidence = 'manual';
+    let authEvidence = [];
+    let authAttempted = false;
+
+    // Tier 1: Check Credentialed_Scan tag in HostProperties
+    if (host.HostProperties?.tag) {
+      const tags = Array.isArray(host.HostProperties.tag)
+        ? host.HostProperties.tag
+        : [host.HostProperties.tag];
+      const credTag = tags.find((t) => t.name === 'Credentialed_Scan');
+      if (credTag) {
+        const val = (credTag._ || credTag || '').toString().toLowerCase().trim();
+        if (val === 'true') {
+          hostAuthenticated = true;
+          authConfidence = 'high';
+          authEvidence.push('Credentialed_Scan tag = true');
+        } else if (val === 'false') {
+          hostAuthenticated = false;
+          authConfidence = 'high';
+          authEvidence.push('Credentialed_Scan tag = false');
+        }
+      }
+    }
+
+    // Tier 2: Plugin 19506 (Nessus Scan Information) — confirms or provides fallback
+    if (hostAuthenticated === null || authConfidence !== 'high') {
+      for (const item of items) {
+        const pluginId = item.pluginID || '';
+        if (pluginId === '19506') {
+          const output = item.plugin_output || '';
+          if (/Credentialed checks\s*:\s*yes/i.test(output)) {
+            if (hostAuthenticated === null) {
+              hostAuthenticated = true;
+              authConfidence = 'high';
+            }
+            authEvidence.push('Plugin 19506: Credentialed checks = yes');
+          } else if (/Credentialed checks\s*:\s*no/i.test(output)) {
+            if (hostAuthenticated === null) {
+              hostAuthenticated = false;
+              authConfidence = 'high';
+            }
+            authEvidence.push('Plugin 19506: Credentialed checks = no');
+          }
+          break;
+        }
+      }
+    }
+
+    // Tier 3: Failure/success indicator plugins
+    if (hostAuthenticated === null) {
+      for (const item of items) {
+        const pluginId = item.pluginID || '';
+        // Plugin 21745: Authentication Failure — credentials provided but failed
+        if (pluginId === '21745') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'medium' : authConfidence;
+          authEvidence.push('Plugin 21745 (Authentication Failure) present — credentials failed');
+        }
+        // Plugin 104410: Credential Status Failure
+        if (pluginId === '104410') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'medium' : authConfidence;
+          authEvidence.push('Plugin 104410 (Credential Status Failure) present');
+        }
+        // Plugin 110385: Authentication Success (sometimes present as standalone)
+        if (pluginId === '110385') {
+          if (hostAuthenticated === null) {
+            hostAuthenticated = true;
+            authConfidence = authConfidence === 'manual' ? 'medium' : authConfidence;
+          }
+          authEvidence.push('Plugin 110385 (Authentication Success) present');
+        }
+      }
+    }
+
+    if (authEvidence.length === 0) {
+      authEvidence.push('No auth indicator found (Credentialed_Scan tag, Plugin 19506, Plugins 21745/104410/110385 all absent)');
+    }
+
+    authStatusByHost.set(assetId, {
+      authenticated: hostAuthenticated,
+      confidence: authConfidence,
+      evidence: authEvidence.join('; '),
+      attempted: authAttempted,
+      manualReviewRequired: hostAuthenticated === null,
+    });
+
     for (const item of items) {
       const severity = mapNessusSeverity(item.severity);
 
@@ -86,7 +181,8 @@ async function parseNessus(xmlContent, fileName, onProgress) {
         original_detection_date: hostDate ? parseNessusDate(hostDate) : null,
         original_risk_rating: severity,
         scan_type: scanType,
-        is_authenticated: null, // Determined later by IIW match
+        is_authenticated: hostAuthenticated,
+        _auth_confidence: authConfidence,
         iiw_match_status: null,
         vendor_dependency: false,
         vendor_name: '',
@@ -102,7 +198,7 @@ async function parseNessus(xmlContent, fileName, onProgress) {
     if (onProgress) onProgress(((h + 1) / totalHosts) * 100);
   }
 
-  return findings;
+  return { findings, authStatusByHost };
 }
 
 function parseNessusDate(dateStr) {

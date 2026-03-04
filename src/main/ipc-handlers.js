@@ -2,6 +2,7 @@ const { ipcMain, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { detectAndParse } = require('../parsers/index');
+const { parseGenericCSV } = require('../parsers/generic-csv');
 const { parseIIW } = require('../parsers/iiw');
 const { parseUniversalFile, applyMapping } = require('../parsers/universal-parser');
 const { matchAssets } = require('../engine/matcher');
@@ -102,6 +103,21 @@ function registerIpcHandlers() {
       return { success: true, path: outputPath };
     } catch (err) {
       return { success: false, error: err.message };
+    }
+  });
+
+  // Parse a scan file with a user-provided field mapping (for unknown CSV formats)
+  ipcMain.handle('parse:scan-file-with-mapping', async (event, filePath, fileName, mapping) => {
+    try {
+      sendProgress(`Parsing ${fileName} with mapping...`, 0);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const findings = await parseGenericCSV(content, fileName, mapping, (pct) => {
+        sendProgress(`Parsing ${fileName}...`, pct);
+      });
+      sendProgress(`Parsed ${fileName}: ${findings.length} findings`, 100);
+      return { scannerType: 'Mapped CSV', findings, authWarning: false };
+    } catch (err) {
+      return { error: err.message, findings: [], scannerType: null };
     }
   });
 

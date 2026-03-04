@@ -23,6 +23,7 @@ async function parseQualys(xmlContent, fileName, onProgress) {
   const result = await parser.parseStringPromise(xmlContent);
 
   const findings = [];
+  const authStatusByHost = new Map(); // hostname → true/false/null
 
   // Try to find vulnerability data in various Qualys XML structures
   let hosts = [];
@@ -64,6 +65,132 @@ async function parseQualys(xmlContent, fileName, onProgress) {
       vulns.push(...dets);
     }
 
+    // ── Multi-layer credential detection (per-host) ──
+    // Auth success QIDs: 70028 (Windows Auth — parse RESULT text), 150007 (WAS Auth Success), 150094 (WAS Selenium Success)
+    // Auth failure QIDs: 105015 (Auth Failure), 105315 (Web Auth Failed), 150008 (WAS Auth Failed), 150095 (WAS Selenium Failed)
+    // HTTP auth: 86762 (HTTP Auth Attempted)
+    let hostAuthenticated = null;
+    let authConfidence = 'manual';
+    let authEvidence = [];
+    let authAttempted = false;
+
+    // Collect QID presence for auth detection
+    const authQIDs = new Set();
+    for (const vuln of vulns) {
+      const qid = String(vuln.QID || vuln.qid || '');
+      if (['70028', '86762', '105015', '105186', '105315', '150007', '150008', '150094', '150095'].includes(qid)) {
+        authQIDs.add(qid);
+
+        const output = vuln.RESULT || vuln.result || vuln.DIAGNOSIS || vuln.diagnosis || '';
+
+        // QID 70028: Windows Authentication Method — must parse RESULT text
+        if (qid === '70028') {
+          authAttempted = true;
+          if (/Authentication\s+Successful/i.test(output) || /success/i.test(output)) {
+            hostAuthenticated = true;
+            authConfidence = 'high';
+            authEvidence.push('QID 70028 (Windows Auth): Authentication Successful');
+          } else if (/Authentication\s+Failed/i.test(output) || /fail/i.test(output)) {
+            hostAuthenticated = false;
+            authConfidence = 'high';
+            authEvidence.push('QID 70028 (Windows Auth): Authentication Failed');
+          }
+        }
+
+        // Auth failure indicators
+        if (qid === '105015') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 105015 (Authentication Failure) present');
+        }
+        if (qid === '105315') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 105315 (Web Authentication Failed) present');
+        }
+        if (qid === '150008') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 150008 (WAS Authentication Failed) present');
+        }
+        if (qid === '150095') {
+          hostAuthenticated = false;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 150095 (WAS Selenium Auth Failed) present');
+        }
+
+        // Auth success indicators (only set if not already determined)
+        if (qid === '150007' && hostAuthenticated === null) {
+          hostAuthenticated = true;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 150007 (WAS Authentication Successful) present');
+        }
+        if (qid === '150094' && hostAuthenticated === null) {
+          hostAuthenticated = true;
+          authAttempted = true;
+          authConfidence = authConfidence === 'manual' ? 'high' : authConfidence;
+          authEvidence.push('QID 150094 (WAS Selenium Auth Successful) present');
+        }
+
+        // QID 105186: Host-Based Auth — secondary check
+        if (qid === '105186') {
+          authAttempted = true;
+          if (/success/i.test(output)) {
+            if (hostAuthenticated === null) {
+              hostAuthenticated = true;
+              authConfidence = authConfidence === 'manual' ? 'medium' : authConfidence;
+            }
+            authEvidence.push('QID 105186 (Host-Based Auth): success');
+          } else if (/fail/i.test(output)) {
+            if (hostAuthenticated === null) {
+              hostAuthenticated = false;
+              authConfidence = authConfidence === 'manual' ? 'medium' : authConfidence;
+            }
+            authEvidence.push('QID 105186 (Host-Based Auth): failure');
+          }
+        }
+
+        // QID 86762: HTTP Auth attempted
+        if (qid === '86762') {
+          authAttempted = true;
+          authEvidence.push('QID 86762 (HTTP Auth Method) present — auth attempted');
+        }
+      }
+    }
+
+    // Secondary: Check for APPENDIX/AUTH_STATS block (if present in parsed XML)
+    if (hostAuthenticated === null && host.AUTH_STATS) {
+      const stats = host.AUTH_STATS;
+      const passed = stats.PASSED || stats.passed;
+      const failed = stats.FAILED || stats.failed;
+      if (passed && !failed) {
+        hostAuthenticated = true;
+        authConfidence = 'medium';
+        authEvidence.push('AUTH_STATS block: PASSED');
+      } else if (failed) {
+        hostAuthenticated = false;
+        authConfidence = 'medium';
+        authEvidence.push('AUTH_STATS block: FAILED');
+      }
+    }
+
+    if (authEvidence.length === 0) {
+      authEvidence.push('No auth QIDs found (70028, 105015, 105186, 105315, 86762, 150007/150008, 150094/150095)');
+    }
+
+    authStatusByHost.set(assetId, {
+      authenticated: hostAuthenticated,
+      confidence: authConfidence,
+      evidence: authEvidence.join('; '),
+      attempted: authAttempted,
+      manualReviewRequired: hostAuthenticated === null,
+    });
+
     for (const vuln of vulns) {
       const severity = mapQualysSeverity(vuln.SEVERITY || vuln.severity || '0');
       const qid = vuln.QID || vuln.qid || '';
@@ -80,7 +207,8 @@ async function parseQualys(xmlContent, fileName, onProgress) {
         original_detection_date: vuln.FIRST_FOUND || vuln.first_found || vuln.LAST_SCAN_DATETIME || null,
         original_risk_rating: severity,
         scan_type: 'VULNERABILITY',
-        is_authenticated: null,
+        is_authenticated: hostAuthenticated,
+        _auth_confidence: authConfidence,
         iiw_match_status: null,
         vendor_dependency: false,
         vendor_name: '',
@@ -96,7 +224,7 @@ async function parseQualys(xmlContent, fileName, onProgress) {
     if (onProgress) onProgress(((h + 1) / totalHosts) * 100);
   }
 
-  return findings;
+  return { findings, authStatusByHost };
 }
 
 module.exports = { parseQualys };

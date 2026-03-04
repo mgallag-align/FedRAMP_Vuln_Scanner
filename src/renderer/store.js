@@ -33,6 +33,12 @@ const useStore = create((set, get) => ({
       scanFiles: state.scanFiles.filter((f) => f.id !== fileId),
       findings: state.findings.filter((f) => f.scanner_file_id !== fileId),
     })),
+  updateScanFile: (fileId, updates) =>
+    set((state) => ({
+      scanFiles: state.scanFiles.map((f) =>
+        f.id === fileId ? { ...f, ...updates } : f
+      ),
+    })),
 
   // ── Findings (CFOs) ──
   findings: [],

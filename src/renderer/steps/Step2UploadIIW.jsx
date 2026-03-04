@@ -43,7 +43,7 @@ export default function Step2UploadIIW() {
     [setIIWData, setProgress]
   );
 
-  const canProceed = iiwAssets.length > 0 && !iiwParseError;
+  const canProceed = !iiwParseError;
 
   // Count duplicates
   const uniqueIds = new Set(iiwAssets.map((a) => a.uniqueAssetId));
@@ -54,6 +54,9 @@ export default function Step2UploadIIW() {
       <h2 className="text-xl font-bold text-fedramp-blue mb-1">Step 2: Upload IIW</h2>
       <p className="text-sm text-gray-500 mb-6">
         Upload the Integrated Inventory Workbook (SSP Appendix M) for this system.
+        <span className="block text-xs text-gray-400 mt-1">
+          This step is optional — you can skip ahead to upload scan files directly.
+        </span>
       </p>
 
       <DropZone

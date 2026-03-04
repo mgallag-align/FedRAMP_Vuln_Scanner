@@ -19,14 +19,24 @@ const RISK_ORDER = { Critical: 0, High: 1, Moderate: 2, Low: 3 };
 async function exportRET(sessionData, outputPath, onProgress) {
   const { systemInfo, findings, iiwAssets, scanFiles } = sessionData;
 
+  // Build file ID → detector type lookup from scan files
+  const detectorTypeMap = new Map();
+  if (scanFiles) {
+    for (const sf of scanFiles) {
+      if (sf.detectorType) {
+        detectorTypeMap.set(sf.id, sf.detectorType);
+      }
+    }
+  }
+
   // Classify findings
   const classified = classifyFindings(
     findings.filter((f) => f.original_risk_rating !== 'Informational')
   );
 
-  const retFindings = sortByRisk(classified.filter((f) => f._destination === 'RET'));
-  const configFindings = sortByRisk(classified.filter((f) => f._destination === 'CONFIG'));
-  const rcdtFindings = sortByRisk(classified.filter((f) => f._destination === 'RCDT'));
+  const retFindings = sortByRisk(consolidateByCVE(classified.filter((f) => f._destination === 'RET')));
+  const configFindings = sortByRisk(consolidateByCVE(classified.filter((f) => f._destination === 'CONFIG')));
+  const rcdtFindings = sortByRisk(consolidateByCVE(classified.filter((f) => f._destination === 'RCDT')));
 
   // Try to load template, fall back to creating new workbook
   const workbook = new ExcelJS.Workbook();
@@ -60,7 +70,7 @@ async function exportRET(sessionData, outputPath, onProgress) {
   // Write RET data starting at row 8
   let retRow = 8;
   for (const cfo of retFindings) {
-    writeRETRow(retSheet, retRow, cfo, systemInfo);
+    writeRETRow(retSheet, retRow, cfo, systemInfo, detectorTypeMap);
     retRow++;
   }
 
@@ -88,7 +98,7 @@ async function exportRET(sessionData, outputPath, onProgress) {
 
   let configRow = 8;
   for (const cfo of configFindings) {
-    writeConfigRow(configSheet, configRow, cfo, systemInfo);
+    writeConfigRow(configSheet, configRow, cfo, systemInfo, detectorTypeMap);
     configRow++;
   }
 
@@ -110,7 +120,7 @@ async function exportRET(sessionData, outputPath, onProgress) {
 
   let rcdtRow = 8;
   for (const cfo of rcdtFindings) {
-    writeRCDTRow(rcdtSheet, rcdtRow, cfo, systemInfo);
+    writeRCDTRow(rcdtSheet, rcdtRow, cfo, systemInfo, detectorTypeMap);
     rcdtRow++;
   }
 
@@ -247,7 +257,7 @@ function writeMetadataRows(sheet, systemInfo) {
   sheet.getCell('D1').value = formatDateForExcel(systemInfo.retDate);
 }
 
-function writeRETRow(sheet, rowNum, cfo) {
+function writeRETRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
   const row = sheet.getRow(rowNum);
 
   // Col B: RET / POA&M ID
@@ -259,8 +269,11 @@ function writeRETRow(sheet, rowNum, cfo) {
   // Col E: Weakness Description (full text)
   row.getCell(5).value = cfo.weakness_description || '';
   row.getCell(5).alignment = { wrapText: true };
-  // Col F: Weakness Detector Source (scanner product name only)
-  row.getCell(6).value = extractScannerName(cfo.scanner_source);
+  // Col F: Weakness Detector Source — user-selected scan type, fallback to scanner name
+  const detectorType = detectorTypeMap && cfo.scanner_file_id
+    ? detectorTypeMap.get(cfo.scanner_file_id) || ''
+    : '';
+  row.getCell(6).value = detectorType || extractScannerName(cfo.scanner_source);
   // Col G: Weakness Source Identifier (blank if none, NOT N/A)
   row.getCell(7).value = cfo.weakness_source_identifier || '';
   // Col H: Asset Identifier
@@ -311,9 +324,9 @@ function writeCM6Row(sheet, rowNum, systemInfo) {
   row.getCell(15).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
 }
 
-function writeConfigRow(sheet, rowNum, cfo) {
+function writeConfigRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
   // Same as RET row plus Column S
-  writeRETRow(sheet, rowNum, cfo);
+  writeRETRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap);
   const row = sheet.getRow(rowNum);
   // Override controls to CM-6 for config findings
   row.getCell(3).value = 'CM-6';
@@ -323,7 +336,7 @@ function writeConfigRow(sheet, rowNum, cfo) {
   row.getCell(15).fill = null;
 }
 
-function writeRCDTRow(sheet, rowNum, cfo) {
+function writeRCDTRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
   const row = sheet.getRow(rowNum);
 
   // Same core fields as RET
@@ -332,7 +345,11 @@ function writeRCDTRow(sheet, rowNum, cfo) {
   row.getCell(4).value = (cfo.weakness_name || '').substring(0, 255);
   row.getCell(5).value = cfo.weakness_description || '';
   row.getCell(5).alignment = { wrapText: true };
-  row.getCell(6).value = extractScannerName(cfo.scanner_source);
+  // Col F: Weakness Detector Source — user-selected scan type, fallback to scanner name
+  const detectorType = detectorTypeMap && cfo.scanner_file_id
+    ? detectorTypeMap.get(cfo.scanner_file_id) || ''
+    : '';
+  row.getCell(6).value = detectorType || extractScannerName(cfo.scanner_source);
   row.getCell(7).value = cfo.weakness_source_identifier || '';
   row.getCell(8).value = cfo.asset_identifier || '';
   row.getCell(8).alignment = { wrapText: true };
@@ -370,6 +387,101 @@ function sortByRisk(findings) {
     if (riskA !== riskB) return riskA - riskB;
     return (a.weakness_name || '').localeCompare(b.weakness_name || '');
   });
+}
+
+/**
+ * Consolidate findings so there is one row per CVE/weakness_source_identifier.
+ * All affected asset identifiers are merged into a single newline-separated string.
+ * When multiple findings share the same CVE, the consolidated row uses:
+ *   - Highest severity (Critical > High > Moderate > Low)
+ *   - Earliest detection date
+ *   - Combined asset identifiers (deduplicated, newline-separated)
+ *   - First non-empty value for other fields (weakness_name, description, etc.)
+ *
+ * Findings without a weakness_source_identifier are passed through as-is (one row each).
+ */
+function consolidateByCVE(findings) {
+  const grouped = new Map();
+  const noIdentifier = [];
+
+  for (const cfo of findings) {
+    const key = cfo.weakness_source_identifier;
+    if (!key) {
+      noIdentifier.push(cfo);
+      continue;
+    }
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key).push(cfo);
+  }
+
+  const consolidated = [];
+
+  for (const [, group] of grouped) {
+    // Start with the highest-severity finding as the base
+    group.sort((a, b) => {
+      const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
+      const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
+      return riskA - riskB;
+    });
+    const base = { ...group[0] };
+
+    // Merge asset identifiers (deduplicated)
+    const assetSet = new Set();
+    for (const cfo of group) {
+      if (cfo.asset_identifier) {
+        // Split in case an asset_identifier already contains multiple values
+        cfo.asset_identifier.split('\n').forEach((a) => {
+          const trimmed = a.trim();
+          if (trimmed) assetSet.add(trimmed);
+        });
+      }
+    }
+    base.asset_identifier = Array.from(assetSet).join('\n');
+
+    // Use earliest detection date
+    let earliest = null;
+    for (const cfo of group) {
+      if (cfo.original_detection_date) {
+        const d = new Date(cfo.original_detection_date);
+        if (!isNaN(d.getTime()) && (!earliest || d < earliest)) {
+          earliest = d;
+        }
+      }
+    }
+    if (earliest) {
+      base.original_detection_date = earliest.toISOString().split('T')[0];
+    }
+
+    // Merge scanner sources (deduplicated)
+    const scannerSet = new Set();
+    for (const cfo of group) {
+      if (cfo.scanner_source) scannerSet.add(cfo.scanner_source);
+    }
+    if (scannerSet.size > 1) {
+      base.scanner_source = Array.from(scannerSet).join('; ');
+    }
+
+    // Fill in any blank fields from other group members
+    for (const field of ['weakness_name', 'weakness_description', 'vendor_name']) {
+      if (!base[field]) {
+        for (const cfo of group) {
+          if (cfo[field]) {
+            base[field] = cfo[field];
+            break;
+          }
+        }
+      }
+    }
+
+    // Vendor dependency: true if any finding says true
+    base.vendor_dependency = group.some((cfo) => cfo.vendor_dependency);
+
+    consolidated.push(base);
+  }
+
+  return [...consolidated, ...noIdentifier];
 }
 
 /**

@@ -1,7 +1,8 @@
 /**
  * RET ID Sequential Assignment.
  *
- * IDs are assigned per tab, sorted by:
+ * Findings are first consolidated by CVE (weakness_source_identifier) so that
+ * each unique CVE gets one ID. IDs are assigned per tab, sorted by:
  *   1. Descending risk rating (Critical → High → Moderate → Low)
  *   2. Alphabetically by weakness_name within same rating
  *
@@ -20,6 +21,41 @@ function sortFindings(findings) {
   });
 }
 
+/**
+ * Consolidate findings by weakness_source_identifier (CVE) within a group.
+ * Findings without a CVE are kept as individual rows.
+ * Returns consolidated array where each CVE appears once.
+ */
+function consolidateGroup(findings) {
+  const grouped = new Map();
+  const noIdentifier = [];
+
+  for (const cfo of findings) {
+    const key = cfo.weakness_source_identifier;
+    if (!key) {
+      noIdentifier.push(cfo);
+      continue;
+    }
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key).push(cfo);
+  }
+
+  const consolidated = [];
+  for (const [, group] of grouped) {
+    // Pick the highest-severity finding as representative
+    group.sort((a, b) => {
+      const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
+      const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
+      return riskA - riskB;
+    });
+    consolidated.push(group[0]);
+  }
+
+  return [...consolidated, ...noIdentifier];
+}
+
 function generateIds(cfos, prefixConfig) {
   const { vulnPrefix = 'VS', configPrefix = 'CF', rcdtPrefix = 'RC' } = prefixConfig;
 
@@ -31,12 +67,12 @@ function generateIds(cfos, prefixConfig) {
   const configFindings = active.filter((f) => f.scan_type === 'CONFIG_FINDING' && !f.mark_as_rcdt);
   const rcdtFindings = active.filter((f) => f.mark_as_rcdt);
 
-  // Sort each group
-  const sortedRET = sortFindings(retFindings);
-  const sortedConfig = sortFindings(configFindings);
-  const sortedRCDT = sortFindings(rcdtFindings);
+  // Consolidate by CVE then sort each group
+  const sortedRET = sortFindings(consolidateGroup(retFindings));
+  const sortedConfig = sortFindings(consolidateGroup(configFindings));
+  const sortedRCDT = sortFindings(consolidateGroup(rcdtFindings));
 
-  // Assign IDs
+  // Assign IDs — one per consolidated CVE
   const idMap = new Map();
 
   sortedRET.forEach((f, idx) => {
@@ -51,10 +87,19 @@ function generateIds(cfos, prefixConfig) {
     idMap.set(f.cfo_id, `${rcdtPrefix}-${String(idx + 1).padStart(3, '0')}`);
   });
 
+  // For consolidated CVEs, all findings sharing the same CVE get the same ID
+  // Build a CVE→ID lookup from the representatives
+  const cveIdMap = new Map();
+  for (const f of [...sortedRET, ...sortedConfig, ...sortedRCDT]) {
+    if (f.weakness_source_identifier && idMap.has(f.cfo_id)) {
+      cveIdMap.set(f.weakness_source_identifier, idMap.get(f.cfo_id));
+    }
+  }
+
   // Apply IDs back to all CFOs
   return cfos.map((f) => ({
     ...f,
-    ret_id: idMap.get(f.cfo_id) || null,
+    ret_id: idMap.get(f.cfo_id) || cveIdMap.get(f.weakness_source_identifier) || null,
   }));
 }
 

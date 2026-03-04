@@ -30,9 +30,17 @@ async function parseUniversalFile(contentBuffer, fileName) {
 }
 
 /**
+ * Strip UTF-8 BOM if present.
+ */
+function stripBOM(str) {
+  return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
+}
+
+/**
  * Parse CSV content and return headers + rows.
  */
 function parseCSV(content) {
+  content = stripBOM(content);
   const records = csvParse(content, {
     columns: true,
     skip_empty_lines: true,
