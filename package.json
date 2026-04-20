@@ -1,0 +1,84 @@
+{
+  "name": "fedramp-ret-tool",
+  "version": "1.0.0",
+  "description": "FedRAMP 3PAO Automated Vulnerability Scan Ingestion Tool",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
+    "dev:react": "react-scripts start",
+    "dev:electron": "wait-on http://localhost:3000 && electron .",
+    "build": "react-scripts build && electron-builder",
+    "build:linux:x86": "react-scripts build && electron-builder --linux --ia32",
+    "build:linux:x64": "react-scripts build && electron-builder --linux --x64",
+    "build:win:x86": "react-scripts build && electron-builder --win --ia32",
+    "build:win:x64": "react-scripts build && electron-builder --win --x64",
+    "build:mac": "react-scripts build && electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.fedramp.ret-tool",
+    "productName": "FedRAMP RET Tool",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "build/**/*",
+      "src/main/**/*",
+      "node_modules/**/*"
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["ia32", "x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["ia32", "x64"]
+        }
+      ],
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["ia32", "x64"]
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.3",
+    "exceljs": "^4.4.0",
+    "xml2js": "^0.6.2",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-scripts": "^5.0.1",
+    "tailwindcss": "^3.4.4",
+    "wait-on": "^7.2.0"
+  },
+  "browserslist": {
+    "production": [">0.2%", "not dead", "not op_mini all"],
+    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+  }
+}
