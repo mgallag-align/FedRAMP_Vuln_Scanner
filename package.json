@@ -2,7 +2,8 @@
   "name": "fedramp-ret-tool",
   "version": "1.0.0",
   "description": "FedRAMP 3PAO Automated Vulnerability Scan Ingestion Tool",
-  "main": "src/main/index.js",
+  "main": "electron.js",
+  "homepage": "./",
   "scripts": {
     "start": "electron .",
     "dev": "concurrently \"npm run dev:react\" \"npm run dev:electron\"",
@@ -24,7 +25,6 @@
     },
     "files": [
       "build/**/*",
-      "src/main/**/*",
       "node_modules/**/*"
     ],
     "linux": {
