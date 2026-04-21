@@ -34,12 +34,4 @@ jobs:
         run: npm run build:win:x86
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/FedRAMP RET Tool Setup *.exe
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
