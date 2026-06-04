@@ -1,4 +1,4 @@
-name: Build & Release Windows x86 Installer
+name: Build & Release Windows Installer
 
 on:
   push:
@@ -7,9 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.0.1)'
+        description: 'Release tag (e.g. v1.0.4)'
         required: true
-        default: 'v1.0.1'
+        default: 'v1.0.4'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -22,22 +25,39 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --legacy-peer-deps
+
+      - name: Build Windows x64 installer
+        run: npm run build:win:x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Windows x86 installer
         run: npm run build:win:x86
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create GitHub Release
+      - name: Create tag if dispatched manually
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git tag ${{ github.event.inputs.tag }} || true
+          git push origin ${{ github.event.inputs.tag }} || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload installers as release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/FedRAMP RET Tool Setup *.exe
-          generate_release_notes: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*.exe
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
