@@ -37,12 +37,6 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Windows x86 installer
-        run: npm run build:win:x86
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create tag if dispatched manually
         if: github.event_name == 'workflow_dispatch'
         run: |
