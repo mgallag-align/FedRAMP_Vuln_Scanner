@@ -16,6 +16,9 @@
     "productName": "FedRAMP RET Tool",
     "files": [
       "src/main/**/*",
+      "src/parsers/**/*",
+      "src/engine/**/*",
+      "src/export/**/*",
       "dist/**/*",
       "assets/**/*",
       "public/**/*"
