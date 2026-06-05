@@ -34,7 +34,7 @@ jobs:
         run: npm run build:renderer
 
       - name: Build Windows x64 installer
-        run: electron-builder --win --x64
+        run: npx electron-builder --win --x64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
