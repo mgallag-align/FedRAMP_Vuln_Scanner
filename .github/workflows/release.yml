@@ -26,13 +26,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
+      - name: Build renderer
+        run: npm run build:renderer
+
       - name: Build Windows x64 installer
-        run: npm run build:win:x64
+        run: electron-builder --win --x64
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,12 +44,13 @@ jobs:
         run: |
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
-          git tag ${{ github.event.inputs.tag }} || true
-          git push origin ${{ github.event.inputs.tag }} || true
+          git tag ${{ github.event.inputs.tag }} 2>$null; exit 0
+          git push origin ${{ github.event.inputs.tag }} 2>$null; exit 0
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload installers as release assets
+      - name: Upload installer as release asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
