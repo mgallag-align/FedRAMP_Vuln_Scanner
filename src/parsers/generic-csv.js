@@ -1,12 +1,5 @@
-const { parse: csvParse } = require('csv-parse/sync');
 const { v4: uuidv4 } = require('uuid');
-
-/**
- * Strip UTF-8 BOM if present.
- */
-function stripBOM(str) {
-  return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
-}
+const { parseCSVSections } = require('./csv-sections');
 
 // Known Rapid7 CSV header patterns
 const RAPID7_HEADERS = ['asset ip address', 'vulnerability title'];
@@ -26,34 +19,29 @@ function mapCVSStoRisk(cvss) {
 
 /**
  * Detect CSV format by inspecting headers.
- * Returns { type: 'rapid7'|'unknown', headers: string[], mapping?: object }
+ *
+ * Section-aware: multi-section files (title block + blank gap + findings table)
+ * resolve to the findings section's headers, so detection and the field-mapper
+ * dropdown see the real columns rather than title/metadata cells.
+ *
+ * Returns { type: 'rapid7'|'unknown', headers: string[], sectionWarning?: object }
  */
 async function detectCSVFormat(csvContent) {
-  csvContent = stripBOM(csvContent);
-  const records = csvParse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    to: 1, // just read first row to get headers
-    relax_column_count: true,
-  });
+  const { headers, sectionWarning } = parseCSVSections(csvContent);
 
-  if (records.length === 0) {
-    // Try to get headers from first line
-    const firstLine = csvContent.split('\n')[0] || '';
-    const headers = firstLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-    return { type: 'unknown', headers };
+  if (headers.length === 0) {
+    return { type: 'unknown', headers: [], sectionWarning };
   }
 
-  const headers = Object.keys(records[0]);
   const lowerHeaders = headers.map((h) => h.toLowerCase().trim());
 
   // Check for Rapid7 pattern
   const isRapid7 = RAPID7_HEADERS.every((rh) => lowerHeaders.includes(rh));
   if (isRapid7) {
-    return { type: 'rapid7', headers };
+    return { type: 'rapid7', headers, sectionWarning };
   }
 
-  return { type: 'unknown', headers };
+  return { type: 'unknown', headers, sectionWarning };
 }
 
 /**
@@ -61,12 +49,10 @@ async function detectCSVFormat(csvContent) {
  * mapping: { asset_identifier: 'CSV Column', weakness_name: 'CSV Column', ... }
  */
 async function parseGenericCSV(csvContent, fileName, mapping, onProgress) {
-  csvContent = stripBOM(csvContent);
-  const records = csvParse(csvContent, {
-    columns: true,
-    skip_empty_lines: true,
-    relax_column_count: true,
-  });
+  // Section-aware parse: selects the findings table even when the file begins
+  // with a title/summary block and blank separator rows, and skips blank rows
+  // within the table so trailing findings are not dropped.
+  const { rows: records } = parseCSVSections(csvContent);
 
   const findings = [];
   const total = records.length;

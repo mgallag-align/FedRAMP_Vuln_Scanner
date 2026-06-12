@@ -1,5 +1,5 @@
-const { parse: csvParse } = require('csv-parse/sync');
 const ExcelJS = require('exceljs');
+const { parseCSVSections, selectBestSection } = require('./csv-sections');
 
 /**
  * Universal file parser for the Vulnerability Mapper.
@@ -30,45 +30,42 @@ async function parseUniversalFile(contentBuffer, fileName) {
 }
 
 /**
- * Strip UTF-8 BOM if present.
+ * Parse CSV content and return headers + rows.
+ *
+ * Section-aware: multi-section files (e.g. Qualys CSV with a title block, a
+ * blank separator, then the findings table) are split on blank rows and the
+ * findings section is selected automatically. Blank rows within that section
+ * are skipped so trailing data is never dropped.
  */
-function stripBOM(str) {
-  return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
+function parseCSV(content) {
+  const { headers, rows, totalRows, sectionWarning } = parseCSVSections(content);
+  return { headers, rows, totalRows, sectionWarning };
 }
 
 /**
- * Parse CSV content and return headers + rows.
+ * Convert an ExcelJS cell value to a plain string, handling rich text,
+ * dates, formulas, and hyperlink objects.
  */
-function parseCSV(content) {
-  content = stripBOM(content);
-  const records = csvParse(content, {
-    columns: true,
-    skip_empty_lines: true,
-    relax_column_count: true,
-    relax_quotes: true,
-  });
-
-  if (records.length === 0) {
-    // Try to extract headers from first line even if no data rows
-    const firstLine = content.split('\n')[0] || '';
-    const headers = firstLine
-      .split(',')
-      .map((h) => h.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean);
-    return { headers, rows: [], totalRows: 0 };
+function cellToString(value) {
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    if (value.richText) return value.richText.map((rt) => rt.text).join('');
+    if (value instanceof Date) return value.toISOString().split('T')[0];
+    if (value.text != null) return String(value.text); // hyperlink
+    if (value.result != null) return String(value.result); // formula
+    if (value.error != null) return String(value.error);
+    return '';
   }
-
-  const headers = Object.keys(records[0]);
-  return {
-    headers,
-    rows: records,
-    totalRows: records.length,
-  };
+  return String(value);
 }
 
 /**
  * Parse Excel (XLSX/XLS) content and return headers + rows.
  * Uses the first worksheet by default.
+ *
+ * Section-aware: the worksheet is read into raw rows (blank rows preserved)
+ * and the findings section is selected automatically — handling exports that
+ * begin with a title/summary block followed by a blank gap and the real table.
  */
 async function parseExcel(contentBuffer) {
   const workbook = new ExcelJS.Workbook();
@@ -79,44 +76,26 @@ async function parseExcel(contentBuffer) {
     throw new Error('Excel file has no data or worksheets.');
   }
 
-  // First row is headers
-  const headerRow = worksheet.getRow(1);
-  const headers = [];
-  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-    headers.push(String(cell.value || `Column_${colNumber}`).trim());
-  });
+  // Build raw array-of-arrays, preserving blank rows so section breaks are
+  // detectable. Determine the max column count across the sheet.
+  const colCount = worksheet.columnCount;
+  const rawRows = [];
+  for (let rowNum = 1; rowNum <= worksheet.rowCount; rowNum++) {
+    const row = worksheet.getRow(rowNum);
+    const cells = [];
+    for (let c = 1; c <= colCount; c++) {
+      cells.push(cellToString(row.getCell(c).value).trim());
+    }
+    rawRows.push(cells);
+  }
+
+  const { headers, rows, totalRows, sectionWarning } = selectBestSection(rawRows);
 
   if (headers.length === 0) {
-    throw new Error('No headers found in the first row of the Excel file.');
+    throw new Error('No headers found in the Excel file.');
   }
 
-  // Parse data rows
-  const rows = [];
-  for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
-    const row = worksheet.getRow(rowNum);
-    const rowObj = {};
-    let hasData = false;
-    headers.forEach((header, idx) => {
-      const cell = row.getCell(idx + 1);
-      const value = cell.value;
-      // Handle ExcelJS rich text, dates, and other types
-      if (value && typeof value === 'object' && value.richText) {
-        rowObj[header] = value.richText.map((rt) => rt.text).join('');
-      } else if (value instanceof Date) {
-        rowObj[header] = value.toISOString().split('T')[0];
-      } else {
-        rowObj[header] = value != null ? String(value) : '';
-      }
-      if (rowObj[header]) hasData = true;
-    });
-    if (hasData) rows.push(rowObj);
-  }
-
-  return {
-    headers,
-    rows,
-    totalRows: rows.length,
-  };
+  return { headers, rows, totalRows, sectionWarning };
 }
 
 /**
