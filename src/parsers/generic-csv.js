@@ -103,6 +103,9 @@ function mapRowsToFindings(records, fileName, mapping, onProgress) {
       hardening_benchmark: mapping.hardening_benchmark
         ? row[mapping.hardening_benchmark] || ''
         : '',
+      compliance_result: null,
+      compliance_actual_value: '',
+      compliance_policy_value: '',
       assessor_comments: '',
       ret_id: null,
       mark_as_rcdt: false,

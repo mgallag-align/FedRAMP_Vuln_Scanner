@@ -286,7 +286,24 @@ export default function Step4ReviewResolve() {
           </div>
           {/* Scan Type */}
           <div className="w-28 flex-shrink-0 px-2 text-xs">
-            {f.scan_type === 'CONFIG_FINDING' ? 'Config' : 'Vuln'}
+            {f.scan_type === 'CONFIG_FINDING' ? (
+              <span className="flex items-center gap-1">
+                <span className="text-gray-600">Config</span>
+                {f.compliance_result && f.compliance_result !== 'PASSED' && f.compliance_result !== 'SKIPPED' && (
+                  <span className={`px-1 rounded font-medium leading-4 ${
+                    f.compliance_result === 'FAILED'
+                      ? 'bg-red-100 text-red-700'
+                      : f.compliance_result === 'WARNING'
+                      ? 'bg-yellow-100 text-yellow-700'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {f.compliance_result}
+                  </span>
+                )}
+              </span>
+            ) : (
+              'Vuln'
+            )}
           </div>
           {/* RCDT */}
           <div className="w-16 flex-shrink-0 text-center">

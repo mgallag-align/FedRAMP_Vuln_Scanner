@@ -171,23 +171,67 @@ async function parseNessus(xmlContent, fileName, onProgress) {
         (item.pluginFamily && item.pluginFamily.toLowerCase().includes('compliance'));
       const scanType = isCompliance ? 'CONFIG_FINDING' : 'VULNERABILITY';
 
+      // ── Compliance-specific extraction ──
+      let complianceResult = null;
+      let complianceActualValue = '';
+      let compliancePolicyValue = '';
+      let riskRating = severity;
+      let weaknessDescription = item.description || '';
+      let assessorComments = '';
+
+      if (isCompliance) {
+        complianceResult = (item['cm:compliance-result'] || '').toUpperCase().trim() || null;
+        complianceActualValue = item['cm:compliance-actual-value'] || '';
+        compliancePolicyValue = item['cm:compliance-policy-value'] || '';
+
+        // Prefer compliance-info as description when available
+        if (item['cm:compliance-info']) weaknessDescription = item['cm:compliance-info'];
+
+        // Override severity based on compliance result
+        if (complianceResult === 'PASSED' || complianceResult === 'SKIPPED') {
+          riskRating = 'Informational'; // filtered out everywhere; PASSED checks are not findings
+        } else if (complianceResult === 'WARNING' && riskRating === 'Informational') {
+          riskRating = 'Low'; // promote from Informational when WARNING
+        } else if (
+          (complianceResult === 'FAILED' || complianceResult === 'ERROR') &&
+          riskRating === 'Informational'
+        ) {
+          riskRating = 'Moderate'; // promote when Nessus assigned severity 0 to a failed check
+        }
+
+        // Pre-populate comments with actual vs expected values for assessor context
+        if (complianceResult && complianceResult !== 'PASSED' && complianceResult !== 'SKIPPED') {
+          const parts = [];
+          if (complianceActualValue) parts.push(`Actual: ${complianceActualValue}`);
+          if (compliancePolicyValue) parts.push(`Expected: ${compliancePolicyValue}`);
+          if (parts.length > 0) assessorComments = `[${complianceResult}] ${parts.join(' | ')}`;
+        }
+      }
+
       const cfo = {
         cfo_id: uuidv4(),
         scanner_source: `${fileName} | Tenable Nessus`,
-        weakness_name: item.plugin_name || item.pluginName || '',
-        weakness_description: item.description || '',
+        // For compliance items: use the specific check name as weakness_name;
+        // plugin_name (the overall benchmark title) goes in hardening_benchmark.
+        weakness_name: isCompliance
+          ? (item['cm:compliance-check-name'] || item.plugin_name || item.pluginName || '')
+          : (item.plugin_name || item.pluginName || ''),
+        weakness_description: weaknessDescription,
         weakness_source_identifier: item.pluginID || '',
         asset_identifier: assetId,
         original_detection_date: hostDate ? parseNessusDate(hostDate) : null,
-        original_risk_rating: severity,
+        original_risk_rating: riskRating,
         scan_type: scanType,
         is_authenticated: hostAuthenticated,
         _auth_confidence: authConfidence,
         iiw_match_status: null,
         vendor_dependency: false,
         vendor_name: '',
-        hardening_benchmark: isCompliance ? (item['cm:compliance-check-name'] || '') : '',
-        assessor_comments: '',
+        hardening_benchmark: isCompliance ? (item.plugin_name || item.pluginName || '') : '',
+        compliance_result: complianceResult,
+        compliance_actual_value: complianceActualValue,
+        compliance_policy_value: compliancePolicyValue,
+        assessor_comments: assessorComments,
         ret_id: null,
         mark_as_rcdt: false,
       };

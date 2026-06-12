@@ -345,6 +345,20 @@ function writeConfigRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
   row.getCell(19).value = cfo.hardening_benchmark || '';
   // False Positive is NOT greyed out on Config Findings tab
   row.getCell(15).fill = null;
+
+  // Prepend compliance result to comments when present and not already included
+  // (parser pre-populates assessor_comments with "[RESULT] Actual: X | Expected: Y")
+  if (
+    cfo.compliance_result &&
+    cfo.compliance_result !== 'PASSED' &&
+    cfo.compliance_result !== 'SKIPPED'
+  ) {
+    const tag = `[${cfo.compliance_result}]`;
+    const existing = String(row.getCell(18).value || '');
+    if (!existing.includes(tag)) {
+      row.getCell(18).value = existing ? `${tag} ${existing}` : tag;
+    }
+  }
 }
 
 function writeRCDTRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
