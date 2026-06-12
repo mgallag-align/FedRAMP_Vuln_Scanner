@@ -4,66 +4,127 @@ const { parseRapid7 } = require('./rapid7');
 const { parsePrisma } = require('./prisma');
 const { parseSCAP } = require('./scap');
 const { parseGenericCSV, detectCSVFormat } = require('./generic-csv');
+const { parseUniversalFile } = require('./universal-parser');
+
+// Formats whose rows can be re-extracted for the manual field mapper. When a
+// parse of one of these fails, the UI can offer "Retry with field mapper".
+const RECOVERABLE_EXTS = new Set(['csv', 'xls', 'xlsx', 'json']);
+
+/**
+ * Build a structured, user-friendly failure result. `recoverable` tells the UI
+ * whether retrying through the field mapper could succeed (tabular formats),
+ * and `errorDetail` carries the raw message/stack for the local error log.
+ */
+function parseFailure(fileName, ext, err, friendly) {
+  const rawMessage = (err && err.message) || String(err || 'Unknown error');
+  return {
+    error: friendly || `Could not parse ${fileName} — ${rawMessage}`,
+    errorDetail: err && err.stack ? err.stack : rawMessage,
+    recoverable: RECOVERABLE_EXTS.has(ext),
+    findings: [],
+    scannerType: null,
+  };
+}
 
 /**
  * Detect scanner type from file content and extension, then parse.
- * Returns { scannerType, findings[], authWarning, authDetails?, error?, needsMapping?, csvHeaders? }
+ * Returns { scannerType, findings[], authWarning, authDetails?, error?,
+ *           errorDetail?, recoverable?, needsMapping?, csvHeaders? }
  *
  * authWarning: true if scan auth status is unknown or any hosts were unauthenticated
  * authDetails: optional string with specifics (e.g., "3 of 10 hosts unauthenticated")
+ *
+ * Every parser invocation is wrapped so a malformed/truncated file yields a
+ * structured failure (logged by the caller) instead of an unhandled throw.
  */
 async function detectAndParse(contentBuffer, fileName, onProgress) {
   const ext = fileName.toLowerCase().split('.').pop();
-  let content = contentBuffer.toString('utf-8');
+
+  // ── .xlsx / .xls → tabular spreadsheets always go through the field mapper ──
+  if (ext === 'xlsx' || ext === 'xls') {
+    try {
+      const { headers } = await parseUniversalFile(contentBuffer, fileName);
+      return {
+        error: `Spreadsheet ${fileName} requires manual field mapping.`,
+        findings: [],
+        scannerType: null,
+        needsMapping: true,
+        recoverable: true,
+        csvHeaders: headers,
+      };
+    } catch (err) {
+      return parseFailure(fileName, ext, err);
+    }
+  }
+
+  let content;
+  try {
+    content = contentBuffer.toString('utf-8');
+  } catch (err) {
+    return parseFailure(fileName, ext, err, `Could not read ${fileName} — file may be binary or corrupt.`);
+  }
   // Strip UTF-8 BOM if present
   if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1);
 
   // ── .nessus files → always Tenable Nessus ──
   if (ext === 'nessus') {
     if (!content.includes('<NessusClientData_v2')) {
-      return { error: `Could not parse ${fileName} — file may be corrupt or truncated.`, findings: [], scannerType: null };
+      return parseFailure(fileName, ext, new Error('not a valid Nessus v2 file'),
+        `Could not parse ${fileName} — file may be corrupt or truncated.`);
     }
-    return handleNessusResult(await parseNessus(content, fileName, onProgress));
+    try {
+      return handleNessusResult(await parseNessus(content, fileName, onProgress));
+    } catch (err) {
+      return parseFailure(fileName, ext, err);
+    }
   }
 
   // ── .xml files → Qualys, SCAP/XCCDF, or Rapid7 ──
   if (ext === 'xml') {
-    // Qualys detection
-    if (content.includes('<SCAN') || content.includes('<QualysGuardEnterpriseQualityReport')) {
-      const qualysResult = await parseQualys(content, fileName, onProgress);
-      return handleQualysResult(qualysResult);
-    }
+    try {
+      // Qualys detection
+      if (content.includes('<SCAN') || content.includes('<QualysGuardEnterpriseQualityReport')) {
+        return handleQualysResult(await parseQualys(content, fileName, onProgress));
+      }
 
-    // SCAP / XCCDF detection — SCAP benchmarks are agent-based (authenticated by nature)
-    if (content.includes('xccdf') || content.includes('<Benchmark') || content.includes('<TestResult')) {
-      const findings = await parseSCAP(content, fileName, onProgress);
-      return {
-        scannerType: 'SCAP/XCCDF',
-        findings,
-        authWarning: false,
-        authDetails: 'Authenticated — SCAP/XCCDF benchmarks execute locally on the host (agent-based)',
-        authField: 'N/A (inherently authenticated — agent runs on target host)',
-      };
-    }
+      // SCAP / XCCDF detection — SCAP benchmarks are agent-based (authenticated by nature)
+      if (content.includes('xccdf') || content.includes('<Benchmark') || content.includes('<TestResult')) {
+        const findings = await parseSCAP(content, fileName, onProgress);
+        return {
+          scannerType: 'SCAP/XCCDF',
+          findings,
+          authWarning: false,
+          authDetails: 'Authenticated — SCAP/XCCDF benchmarks execute locally on the host (agent-based)',
+          authField: 'N/A (inherently authenticated — agent runs on target host)',
+        };
+      }
 
-    // Rapid7 XML detection
-    if (content.includes('<NexposeReport') || content.includes('<VulnerabilityDefinitions')) {
-      const rapid7Result = await parseRapid7(content, fileName, onProgress, 'xml');
-      return handleRapid7Result(rapid7Result, 'xml');
-    }
+      // Rapid7 XML detection
+      if (content.includes('<NexposeReport') || content.includes('<VulnerabilityDefinitions')) {
+        return handleRapid7Result(await parseRapid7(content, fileName, onProgress, 'xml'), 'xml');
+      }
 
-    // Nessus XML without .nessus extension
-    if (content.includes('<NessusClientData_v2')) {
-      return handleNessusResult(await parseNessus(content, fileName, onProgress));
-    }
+      // Nessus XML without .nessus extension
+      if (content.includes('<NessusClientData_v2')) {
+        return handleNessusResult(await parseNessus(content, fileName, onProgress));
+      }
 
-    return { error: `Could not parse ${fileName} — unrecognized XML format.`, findings: [], scannerType: null };
+      return parseFailure(fileName, ext, new Error('unrecognized XML schema'),
+        `Could not parse ${fileName} — unrecognized XML format. Supported XML: Qualys, SCAP/XCCDF, Rapid7, Nessus.`);
+    } catch (err) {
+      return parseFailure(fileName, ext, err);
+    }
   }
 
   // ── .json files → Prisma Cloud / Twistlock ──
   if (ext === 'json') {
+    let json;
     try {
-      const json = JSON.parse(content);
+      json = JSON.parse(content);
+    } catch (err) {
+      return parseFailure(fileName, ext, err, `Could not parse ${fileName} — invalid JSON.`);
+    }
+    try {
       if (json.results || json.vulnerabilities) {
         const findings = await parsePrisma(json, fileName, onProgress);
         return {
@@ -74,44 +135,51 @@ async function detectAndParse(contentBuffer, fileName, onProgress) {
           authField: 'N/A (inherently authenticated — agent scans container images directly)',
         };
       }
-      return { error: `Could not parse ${fileName} — JSON does not match known scanner format.`, findings: [], scannerType: null };
-    } catch {
-      return { error: `Could not parse ${fileName} — invalid JSON.`, findings: [], scannerType: null };
+      // Unrecognized JSON shape — recoverable via the field mapper.
+      return parseFailure(fileName, ext, new Error('JSON does not match a known scanner format'),
+        `Could not auto-detect ${fileName} — JSON does not match a known scanner format. You can map its fields manually.`);
+    } catch (err) {
+      return parseFailure(fileName, ext, err);
     }
   }
 
   // ── .csv files → Rapid7 or Generic CSV ──
   if (ext === 'csv') {
-    const detection = await detectCSVFormat(content);
+    try {
+      const detection = await detectCSVFormat(content);
 
-    if (detection.type === 'rapid7') {
-      const rapid7Result = await parseRapid7(content, fileName, onProgress, 'csv');
-      return handleRapid7Result(rapid7Result, 'csv');
-    }
+      if (detection.type === 'rapid7') {
+        return handleRapid7Result(await parseRapid7(content, fileName, onProgress, 'csv'), 'csv');
+      }
 
-    if (detection.type === 'unknown') {
-      // Need manual field mapping
+      if (detection.type === 'unknown') {
+        // Need manual field mapping
+        return {
+          error: `Unknown CSV format for ${fileName}. Manual field mapping required.`,
+          findings: [],
+          scannerType: null,
+          needsMapping: true,
+          recoverable: true,
+          csvHeaders: detection.headers,
+        };
+      }
+
+      // Attempt generic parse with auto-detected mapping
+      const findings = await parseGenericCSV(content, fileName, detection.mapping, onProgress);
       return {
-        error: `Unknown CSV format for ${fileName}. Manual field mapping required.`,
-        findings: [],
-        scannerType: null,
-        needsMapping: true,
-        csvHeaders: detection.headers,
+        scannerType: 'Generic CSV',
+        findings,
+        authWarning: true,
+        authDetails: 'Authentication status unknown — CSV export does not contain credential check fields',
+        authField: 'No standard auth indicator field available in CSV format',
       };
+    } catch (err) {
+      return parseFailure(fileName, ext, err);
     }
-
-    // Attempt generic parse with auto-detected mapping
-    const findings = await parseGenericCSV(content, fileName, detection.mapping, onProgress);
-    return {
-      scannerType: 'Generic CSV',
-      findings,
-      authWarning: true,
-      authDetails: 'Authentication status unknown — CSV export does not contain credential check fields',
-      authField: 'No standard auth indicator field available in CSV format',
-    };
   }
 
-  return { error: `Unsupported file type: ${ext}`, findings: [], scannerType: null };
+  return parseFailure(fileName, ext, new Error(`unsupported file type: .${ext}`),
+    `Unsupported file type: .${ext}. Supported: .nessus, .xml, .csv, .json, .xlsx, .xls`);
 }
 
 /**

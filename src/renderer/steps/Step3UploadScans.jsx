@@ -3,6 +3,7 @@ import useStore from '../store';
 import DropZone from '../components/DropZone';
 import ScannerBadge from '../components/ScannerBadge';
 import FieldMapperModal from '../components/FieldMapperModal';
+import ParseErrorModal from '../components/ParseErrorModal';
 import { v4 as uuidv4 } from 'uuid';
 
 export default function Step3UploadScans() {
@@ -20,6 +21,7 @@ export default function Step3UploadScans() {
 
   const [mapperState, setMapperState] = useState(null); // { csvHeaders, filePath, fileName, fileId }
   const [parseErrors, setParseErrors] = useState([]);
+  const [failedFiles, setFailedFiles] = useState([]); // queue of hard parse failures → ParseErrorModal
   const [expandedAuthFile, setExpandedAuthFile] = useState(null); // fileId for expanded host details
 
   const handleFiles = useCallback(
@@ -33,7 +35,7 @@ export default function Step3UploadScans() {
 
           if (result.error) {
             if (result.needsMapping && result.csvHeaders) {
-              // Open field mapper modal
+              // Auto-detected as an unknown tabular format → open field mapper
               setMapperState({
                 csvHeaders: result.csvHeaders,
                 filePath: file.path,
@@ -41,9 +43,18 @@ export default function Step3UploadScans() {
                 fileId,
               });
             } else {
-              setParseErrors((prev) => [
+              // Hard parse failure → recovery modal (Retry with mapper / Skip)
+              setFailedFiles((prev) => [
                 ...prev,
-                { fileName: file.name, error: result.error },
+                {
+                  fileId,
+                  fileName: file.name,
+                  filePath: file.path,
+                  error: result.error,
+                  errorDetail: result.errorDetail,
+                  recoverable: !!result.recoverable,
+                  logPath: result.logPath,
+                },
               ]);
             }
             continue;
@@ -80,9 +91,17 @@ export default function Step3UploadScans() {
 
           setFindings([...useStore.getState().findings, ...taggedFindings]);
         } catch (err) {
-          setParseErrors((prev) => [
+          const ext = (file.name.split('.').pop() || '').toLowerCase();
+          setFailedFiles((prev) => [
             ...prev,
-            { fileName: file.name, error: `Could not parse ${file.name} — file may be corrupt or truncated.` },
+            {
+              fileId,
+              fileName: file.name,
+              filePath: file.path,
+              error: `Could not parse ${file.name} — file may be corrupt or truncated.`,
+              errorDetail: err && err.message,
+              recoverable: ['csv', 'xls', 'xlsx', 'json'].includes(ext),
+            },
           ]);
         }
       }
@@ -144,6 +163,58 @@ export default function Step3UploadScans() {
     [mapperState, addScanFile, setFindings, setProgress]
   );
 
+  // Dequeue the first failed file (after the user chooses an action on it).
+  const dequeueFailure = useCallback((fileId) => {
+    setFailedFiles((prev) => prev.filter((f) => f.fileId !== fileId));
+  }, []);
+
+  // "Retry with Field Mapper" on a failed file: re-extract its columns through
+  // the universal parser, then open the field mapper. If headers can't be read,
+  // surface that as a banner so the user isn't stuck on the modal.
+  const handleRetryWithMapper = useCallback(
+    async (failed) => {
+      dequeueFailure(failed.fileId);
+      setProgress({ message: `Reading columns from ${failed.fileName}...`, percent: 0, visible: true });
+      try {
+        const res = await window.electronAPI.mapperParseFile(failed.filePath, failed.fileName);
+        if (res && res.headers && res.headers.length > 0) {
+          setMapperState({
+            csvHeaders: res.headers,
+            filePath: failed.filePath,
+            fileName: failed.fileName,
+            fileId: failed.fileId,
+          });
+        } else {
+          setParseErrors((prev) => [
+            ...prev,
+            {
+              fileName: failed.fileName,
+              error: (res && res.error) || 'No columns could be read from this file for mapping.',
+            },
+          ]);
+        }
+      } catch (err) {
+        setParseErrors((prev) => [
+          ...prev,
+          { fileName: failed.fileName, error: err.message },
+        ]);
+      }
+      setProgress({ message: '', percent: 0, visible: false });
+    },
+    [dequeueFailure, setProgress]
+  );
+
+  const handleSkipFailure = useCallback(
+    (failed) => {
+      dequeueFailure(failed.fileId);
+      setParseErrors((prev) => [
+        ...prev,
+        { fileName: failed.fileName, error: 'Skipped — not included in the RET.', isWarning: true },
+      ]);
+    },
+    [dequeueFailure]
+  );
+
   const handleRemoveFile = useCallback(
     (fileId) => {
       removeScanFile(fileId);
@@ -170,15 +241,15 @@ export default function Step3UploadScans() {
     <div className="max-w-3xl mx-auto">
       <h2 className="text-xl font-bold text-fedramp-blue mb-1">Step 3: Upload Scan Files</h2>
       <p className="text-sm text-gray-500 mb-6">
-        Drop one or more vulnerability scan result files. Supported: .nessus, .xml, .csv, .json
+        Drop one or more vulnerability scan result files. Supported: .nessus, .xml, .csv, .json, .xlsx, .xls
       </p>
 
       <DropZone
-        accept=".nessus,.xml,.csv,.json"
+        accept=".nessus,.xml,.csv,.json,.xlsx,.xls"
         multiple={true}
         onFilesDropped={handleFiles}
         label="Drag & drop scan files here"
-        sublabel="Accepts .nessus, .xml, .csv, .json — multiple files supported"
+        sublabel="Accepts .nessus, .xml, .csv, .json, .xlsx, .xls — multiple files supported"
       />
 
       {/* Parse errors */}
@@ -382,6 +453,15 @@ export default function Step3UploadScans() {
             ))}
           </ul>
         </div>
+      )}
+
+      {/* Parse Error Recovery Modal (one failed file at a time) */}
+      {failedFiles.length > 0 && !mapperState && (
+        <ParseErrorModal
+          failure={failedFiles[0]}
+          onRetryWithMapper={() => handleRetryWithMapper(failedFiles[0])}
+          onSkip={() => handleSkipFailure(failedFiles[0])}
+        />
       )}
 
       {/* Field Mapper Modal */}

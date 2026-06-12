@@ -2,13 +2,14 @@ const { ipcMain, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { detectAndParse } = require('../parsers/index');
-const { parseGenericCSV } = require('../parsers/generic-csv');
+const { mapRowsToFindings } = require('../parsers/generic-csv');
 const { parseIIW } = require('../parsers/iiw');
 const { parseUniversalFile, applyMapping } = require('../parsers/universal-parser');
 const { matchAssets } = require('../engine/matcher');
 const { generateIds } = require('../engine/id-generator');
 const { validateExport } = require('../engine/validator');
 const { exportRET } = require('../export/ret-writer');
+const { logParseError, getLogPath } = require('./error-log');
 
 function sendProgress(message, percent) {
   const windows = BrowserWindow.getAllWindows();
@@ -56,10 +57,28 @@ function registerIpcHandlers() {
       const result = await detectAndParse(content, fileName, (pct) => {
         sendProgress(`Parsing ${fileName}...`, pct);
       });
-      sendProgress(`Parsed ${fileName}: ${result.findings.length} findings`, 100);
+      // Log structured failures returned by the parsers (non-throwing path).
+      if (result && result.error && !result.needsMapping) {
+        const logPath = logParseError({
+          fileName,
+          stage: 'detectAndParse',
+          error: result.errorDetail || result.error,
+        });
+        result.logPath = logPath;
+      }
+      sendProgress(`Parsed ${fileName}: ${(result.findings || []).length} findings`, 100);
       return result;
     } catch (err) {
-      return { error: err.message, findings: [], scannerType: null };
+      const ext = (fileName || '').toLowerCase().split('.').pop();
+      const logPath = logParseError({ fileName, stage: 'parse:scan-file', error: err });
+      return {
+        error: `Could not parse ${fileName} — the file may be corrupt or truncated.`,
+        errorDetail: err && err.stack ? err.stack : String(err && err.message || err),
+        recoverable: ['csv', 'xls', 'xlsx', 'json'].includes(ext),
+        logPath,
+        findings: [],
+        scannerType: null,
+      };
     }
   });
 
@@ -106,18 +125,28 @@ function registerIpcHandlers() {
     }
   });
 
-  // Parse a scan file with a user-provided field mapping (for unknown CSV formats)
+  // Parse a scan file with a user-provided field mapping (for unknown tabular
+  // formats — CSV, XLSX/XLS, or JSON). Rows are extracted by the universal
+  // parser, then mapped to CFOs, so a single path serves every tabular source.
   ipcMain.handle('parse:scan-file-with-mapping', async (event, filePath, fileName, mapping) => {
     try {
       sendProgress(`Parsing ${fileName} with mapping...`, 0);
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const findings = await parseGenericCSV(content, fileName, mapping, (pct) => {
+      const content = fs.readFileSync(filePath);
+      const { rows } = await parseUniversalFile(content, fileName);
+      const findings = mapRowsToFindings(rows, fileName, mapping, (pct) => {
         sendProgress(`Parsing ${fileName}...`, pct);
       });
       sendProgress(`Parsed ${fileName}: ${findings.length} findings`, 100);
-      return { scannerType: 'Mapped CSV', findings, authWarning: false };
+      return { scannerType: 'Mapped Import', findings, authWarning: false };
     } catch (err) {
-      return { error: err.message, findings: [], scannerType: null };
+      const logPath = logParseError({ fileName, stage: 'parse:scan-file-with-mapping', error: err });
+      return {
+        error: `Could not apply mapping to ${fileName} — ${err.message}`,
+        errorDetail: err && err.stack ? err.stack : String(err && err.message || err),
+        logPath,
+        findings: [],
+        scannerType: null,
+      };
     }
   });
 
@@ -131,7 +160,17 @@ function registerIpcHandlers() {
       sendProgress(`Parsed ${fileName}: ${result.totalRows} rows`, 100);
       return result;
     } catch (err) {
-      return { error: err.message, headers: [], rows: [], totalRows: 0 };
+      const logPath = logParseError({ fileName, stage: 'mapper:parse-file', error: err });
+      return { error: err.message, errorDetail: err && err.stack, logPath, headers: [], rows: [], totalRows: 0 };
+    }
+  });
+
+  // ── Return the path to the local parse-error log (for bug reports) ──
+  ipcMain.handle('log:get-parse-log-path', async () => {
+    try {
+      return { path: getLogPath() };
+    } catch (err) {
+      return { path: null, error: err.message };
     }
   });
 

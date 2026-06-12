@@ -45,15 +45,16 @@ async function detectCSVFormat(csvContent) {
 }
 
 /**
- * Parse a generic CSV using a user-provided field mapping.
- * mapping: { asset_identifier: 'CSV Column', weakness_name: 'CSV Column', ... }
+ * Apply a user-provided field mapping to already-parsed tabular rows and build
+ * Canonical Finding Objects (CFOs).
+ *
+ * This is format-agnostic: `records` is an array of plain row objects keyed by
+ * header name, so it serves CSV, XLSX/XLS, and JSON sources alike (the caller
+ * extracts rows with the appropriate parser first).
+ *
+ * mapping: { asset_identifier: 'Column', weakness_name: 'Column', ... }
  */
-async function parseGenericCSV(csvContent, fileName, mapping, onProgress) {
-  // Section-aware parse: selects the findings table even when the file begins
-  // with a title/summary block and blank separator rows, and skips blank rows
-  // within the table so trailing findings are not dropped.
-  const { rows: records } = parseCSVSections(csvContent);
-
+function mapRowsToFindings(records, fileName, mapping, onProgress) {
   const findings = [];
   const total = records.length;
 
@@ -115,4 +116,16 @@ async function parseGenericCSV(csvContent, fileName, mapping, onProgress) {
   return findings;
 }
 
-module.exports = { parseGenericCSV, detectCSVFormat };
+/**
+ * Parse a generic CSV string using a user-provided field mapping.
+ *
+ * Section-aware: selects the findings table even when the file begins with a
+ * title/summary block and blank separator rows, and skips blank rows within
+ * the table so trailing findings are not dropped.
+ */
+async function parseGenericCSV(csvContent, fileName, mapping, onProgress) {
+  const { rows: records } = parseCSVSections(csvContent);
+  return mapRowsToFindings(records, fileName, mapping, onProgress);
+}
+
+module.exports = { parseGenericCSV, mapRowsToFindings, detectCSVFormat };

@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Export
   exportRET: (sessionData, outputPath) => ipcRenderer.invoke('export:ret', sessionData, outputPath),
 
+  // Diagnostics
+  getParseLogPath: () => ipcRenderer.invoke('log:get-parse-log-path'),
+
   // Universal Mapper
   mapperParseFile: (filePath, fileName) => ipcRenderer.invoke('mapper:parse-file', filePath, fileName),
   mapperApplyMapping: (rows, mapping, defaults) => ipcRenderer.invoke('mapper:apply-mapping', rows, mapping, defaults),
