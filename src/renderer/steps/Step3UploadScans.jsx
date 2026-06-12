@@ -5,6 +5,7 @@ import ScannerBadge from '../components/ScannerBadge';
 import FieldMapperModal from '../components/FieldMapperModal';
 import ParseErrorModal from '../components/ParseErrorModal';
 import { getAuthPercent, computeCoverage } from '../utils/coverage';
+import { applyRescanComparison } from '../utils/rescan';
 import { v4 as uuidv4 } from 'uuid';
 
 export default function Step3UploadScans() {
@@ -225,15 +226,27 @@ export default function Step3UploadScans() {
   );
 
   const handleProceed = useCallback(() => {
-    deduplicateFindings();
-    const currentFindings = useStore.getState().findings;
+    const allFindings = useStore.getState().findings;
+    const allScanFiles = useStore.getState().scanFiles;
     const currentAssets = useStore.getState().iiwAssets;
-    const currentScanFiles = useStore.getState().scanFiles;
-    window.electronAPI.matchAssets(currentFindings, currentAssets).then((matched) => {
+
+    // Step 1: Apply rescan comparison before dedup — baseline findings absent from
+    // rescan files are auto-marked RCDT; rescan-only (new) findings are included.
+    const hasRescan = allScanFiles.some((sf) => sf.isRescan);
+    if (hasRescan) {
+      setFindings(applyRescanComparison(allFindings, allScanFiles));
+    }
+
+    // Step 2: Dedup by asset+CVE key
+    deduplicateFindings();
+
+    const deduped = useStore.getState().findings;
+
+    // Step 3: IIW asset matching
+    window.electronAPI.matchAssets(deduped, currentAssets).then((matched) => {
       setFindings(matched);
-      // Compute and store coverage metrics now that iiw_match_status is set.
       if (currentAssets && currentAssets.length > 0) {
-        setCoverage(computeCoverage(matched, currentAssets, currentScanFiles));
+        setCoverage(computeCoverage(matched, currentAssets, allScanFiles));
       }
       nextStep();
     });
@@ -436,26 +449,57 @@ export default function Step3UploadScans() {
                     Remove
                   </button>
                 </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <label className="text-xs text-gray-500">Scan Type:</label>
-                  <select
-                    value={sf.detectorType || ''}
-                    onChange={(e) => updateScanFile(sf.id, { detectorType: e.target.value })}
-                    className="text-xs border rounded px-2 py-1 bg-white"
-                  >
-                    <option value="">— Select —</option>
-                    <option value="Infrastructure">Infrastructure</option>
-                    <option value="Database">Database</option>
-                    <option value="Web App">Web App</option>
-                    <option value="Container">Container</option>
-                  </select>
-                  {!sf.detectorType && (
-                    <span className="text-xs text-orange-500">Required for export</span>
+                <div className="mt-2 flex items-center gap-4 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-500">Scan Type:</label>
+                    <select
+                      value={sf.detectorType || ''}
+                      onChange={(e) => updateScanFile(sf.id, { detectorType: e.target.value })}
+                      className="text-xs border rounded px-2 py-1 bg-white"
+                    >
+                      <option value="">— Select —</option>
+                      <option value="Infrastructure">Infrastructure</option>
+                      <option value="Database">Database</option>
+                      <option value="Web App">Web App</option>
+                      <option value="Container">Container</option>
+                    </select>
+                    {!sf.detectorType && (
+                      <span className="text-xs text-orange-500">Required for export</span>
+                    )}
+                  </div>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={!!sf.isRescan}
+                      onChange={(e) => updateScanFile(sf.id, { isRescan: e.target.checked })}
+                      className="rounded"
+                    />
+                    <span className={sf.isRescan ? 'text-blue-700 font-semibold' : ''}>
+                      Rescan
+                    </span>
+                  </label>
+                  {sf.isRescan && (
+                    <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                      Baseline findings absent from this file → auto-RCDT
+                    </span>
                   )}
                 </div>
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Rescan mode explanation — shown when any file is marked as rescan */}
+      {scanFiles.some((sf) => sf.isRescan) && (
+        <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-800">
+          <p className="font-semibold text-blue-900 mb-1">Rescan mode active</p>
+          <p>
+            When you click Next, findings from <strong>baseline</strong> (non-rescan) files that do{' '}
+            <strong>not</strong> appear in rescan files will be automatically marked as{' '}
+            <em>Corrected During Testing (RCDT)</em>. Findings still present in the rescan remain
+            open. New findings discovered only in the rescan are included as open findings.
+          </p>
         </div>
       )}
 

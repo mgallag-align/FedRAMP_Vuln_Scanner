@@ -107,7 +107,14 @@ export default function Step5Export() {
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">RCDT findings:</span>
-            <span className="font-bold">{summary.rcdtCount}</span>
+            <span className="font-bold">
+              {summary.rcdtCount}
+              {summary.rescanRcdt > 0 && (
+                <span className="ml-1 text-xs text-blue-600 font-normal">
+                  ({summary.rescanRcdt} auto-marked from rescan)
+                </span>
+              )}
+            </span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Total findings:</span>

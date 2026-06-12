@@ -306,10 +306,14 @@ export default function Step4ReviewResolve() {
             )}
           </div>
           {/* RCDT */}
-          <div className="w-16 flex-shrink-0 text-center">
+          <div
+            className="w-16 flex-shrink-0 text-center"
+            title={f._rcdt_reason || (f.mark_as_rcdt ? 'Marked as corrected during testing' : '')}
+          >
             <input
               type="checkbox"
               checked={!!f.mark_as_rcdt}
+              className={f._rcdt_reason ? 'accent-blue-600' : ''}
               onChange={(e) =>
                 updateFinding(f.cfo_id, { mark_as_rcdt: e.target.checked })
               }

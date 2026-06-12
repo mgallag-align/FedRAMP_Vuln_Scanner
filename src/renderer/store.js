@@ -117,10 +117,13 @@ const useStore = create((set, get) => ({
       else seen.add(key);
     });
 
+    const rescanRcdt = rcdtFindings.filter((f) => !!f._rcdt_reason).length;
+
     return {
       retCount: retFindings.length,
       configCount: configFindings.length,
       rcdtCount: rcdtFindings.length,
+      rescanRcdt,
       unmatchedCount: unmatched.length,
       ambiguousCount: ambiguous.length,
       unauthCount: unauthenticated.length,
