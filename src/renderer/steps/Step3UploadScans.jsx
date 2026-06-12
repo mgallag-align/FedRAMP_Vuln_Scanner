@@ -4,6 +4,7 @@ import DropZone from '../components/DropZone';
 import ScannerBadge from '../components/ScannerBadge';
 import FieldMapperModal from '../components/FieldMapperModal';
 import ParseErrorModal from '../components/ParseErrorModal';
+import { getAuthPercent, computeCoverage } from '../utils/coverage';
 import { v4 as uuidv4 } from 'uuid';
 
 export default function Step3UploadScans() {
@@ -14,6 +15,7 @@ export default function Step3UploadScans() {
   const findings = useStore((s) => s.findings);
   const setFindings = useStore((s) => s.setFindings);
   const iiwAssets = useStore((s) => s.iiwAssets);
+  const setCoverage = useStore((s) => s.setCoverage);
   const deduplicateFindings = useStore((s) => s.deduplicateFindings);
   const setProgress = useStore((s) => s.setProgress);
   const nextStep = useStore((s) => s.nextStep);
@@ -223,17 +225,19 @@ export default function Step3UploadScans() {
   );
 
   const handleProceed = useCallback(() => {
-    // Run deduplication and asset matching before moving to review
     deduplicateFindings();
-
-    // Match assets via IPC
     const currentFindings = useStore.getState().findings;
     const currentAssets = useStore.getState().iiwAssets;
+    const currentScanFiles = useStore.getState().scanFiles;
     window.electronAPI.matchAssets(currentFindings, currentAssets).then((matched) => {
       setFindings(matched);
+      // Compute and store coverage metrics now that iiw_match_status is set.
+      if (currentAssets && currentAssets.length > 0) {
+        setCoverage(computeCoverage(matched, currentAssets, currentScanFiles));
+      }
       nextStep();
     });
-  }, [deduplicateFindings, setFindings, nextStep]);
+  }, [deduplicateFindings, setFindings, setCoverage, nextStep]);
 
   const canProceed = scanFiles.length > 0;
 
@@ -452,6 +456,56 @@ export default function Step3UploadScans() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Coverage & Authentication Summary — shown once scan files are loaded */}
+      {scanFiles.length > 0 && (
+        <div className="mt-4 bg-white rounded-lg border shadow-sm overflow-hidden">
+          <div className="px-4 py-2 bg-gray-50 border-b flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Coverage &amp; Authentication Summary</h3>
+            {iiwAssets.length > 0 ? (
+              <span className="text-xs text-gray-500">{iiwAssets.length} IIW assets loaded — coverage computed after matching</span>
+            ) : (
+              <span className="text-xs text-orange-500">No IIW loaded — upload in Step 2 for coverage tracking</span>
+            )}
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-gray-500 border-b bg-gray-50">
+                <th className="px-3 py-2 font-medium">Scanner File</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium">Hosts</th>
+                <th className="px-3 py-2 font-medium">Auth%</th>
+                <th className="px-3 py-2 font-medium">Coverage%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scanFiles.map((sf) => {
+                const authPct = getAuthPercent(sf.authSummary);
+                const totalHosts = sf.authSummary?.totalHosts || 0;
+                return (
+                  <tr key={sf.id} className="border-b last:border-0">
+                    <td className="px-3 py-2 font-medium truncate max-w-[180px]" title={sf.name}>{sf.name}</td>
+                    <td className="px-3 py-2 text-gray-500">{sf.scannerType || '—'}</td>
+                    <td className="px-3 py-2 text-gray-600">{totalHosts > 0 ? totalHosts : '—'}</td>
+                    <td className="px-3 py-2">
+                      {authPct !== null ? (
+                        <span className={authPct === 100 ? 'text-green-600 font-semibold' : authPct >= 80 ? 'text-yellow-600 font-semibold' : 'text-red-600 font-semibold'}>
+                          {authPct}%
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-gray-400 italic">
+                      {iiwAssets.length > 0 ? 'Click Next to compute' : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 

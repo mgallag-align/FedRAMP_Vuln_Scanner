@@ -17,7 +17,7 @@ const RISK_ORDER = { Critical: 0, High: 1, Moderate: 2, Low: 3 };
  *   - PL-2 Findings (preserved blank with headers)
  */
 async function exportRET(sessionData, outputPath, onProgress) {
-  const { systemInfo, findings, iiwAssets, scanFiles } = sessionData;
+  const { systemInfo, findings, iiwAssets, scanFiles, coverage } = sessionData;
 
   // Build file ID → detector type lookup from scan files
   const detectorTypeMap = new Map();
@@ -133,6 +133,17 @@ async function exportRET(sessionData, outputPath, onProgress) {
     const pl2Sheet = workbook.addWorksheet('PL-2 Findings');
     buildPL2Headers(pl2Sheet, systemInfo);
   }
+
+  // ═══════════════════════════════════════════
+  // Scan Coverage Summary Tab (optional — only when IIW was uploaded)
+  // ═══════════════════════════════════════════
+  if (coverage && coverage.totalIIW > 0) {
+    const existing = workbook.getWorksheet('Scan Coverage Summary');
+    if (existing) workbook.removeWorksheet(existing.id);
+    writeCoverageSummarySheet(workbook, coverage, systemInfo);
+  }
+
+  if (onProgress) onProgress(95);
 
   // Write to file
   await workbook.xlsx.writeFile(outputPath);
@@ -507,6 +518,98 @@ function formatDateForExcel(dateStr) {
   } catch {
     return dateStr;
   }
+}
+
+/**
+ * Write a "Scan Coverage Summary" sheet to the workbook.
+ * Documents authenticated% and inventory coverage% for each scanner,
+ * plus a list of IIW assets not reached by any scan — FedRAMP expects
+ * assessors to account for all inventory assets.
+ */
+function writeCoverageSummarySheet(workbook, coverage, systemInfo) {
+  const sheet = workbook.addWorksheet('Scan Coverage Summary');
+
+  const hdrFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF003366' } };
+  const hdrFont = { bold: true, color: { argb: 'FFFFFFFF' } };
+  const sectionFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+
+  // Row 1: System metadata
+  sheet.getCell('A1').value = systemInfo.cspName || '';
+  sheet.getCell('B1').value = systemInfo.systemName || '';
+  sheet.getCell('C1').value = systemInfo.impactLevel || '';
+  sheet.getCell('D1').value = formatDateForExcel(systemInfo.retDate);
+
+  // Row 2: Generated timestamp
+  sheet.getCell('A2').value = `Generated: ${new Date(coverage.computedAt || Date.now()).toLocaleString()}`;
+  sheet.getCell('A2').font = { italic: true, color: { argb: 'FF666666' } };
+
+  // Row 4: Global summary
+  sheet.getCell('A4').value = 'Global Coverage Summary';
+  sheet.getCell('A4').font = { bold: true };
+  sheet.getCell('A4').fill = sectionFill;
+  sheet.getCell('B4').value = `${coverage.coveragePercent}% — ${coverage.coveredAssets} of ${coverage.totalIIW} IIW assets covered`;
+
+  // Row 6: Per-scanner table header
+  const colHdrs = ['Scanner File', 'Scanner Type', 'Authenticated%', 'Coverage%', 'Assets Covered', 'Total IIW Assets'];
+  const headerRow = sheet.getRow(6);
+  colHdrs.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = hdrFont;
+    cell.fill = hdrFill;
+    cell.alignment = { horizontal: 'center' };
+  });
+
+  // Per-scanner data rows
+  let r = 7;
+  for (const ps of (coverage.perScanner || [])) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = ps.fileName || '';
+    row.getCell(2).value = ps.scannerType || '';
+    row.getCell(3).value = ps.authPercent !== null ? `${ps.authPercent}%` : 'N/A';
+    row.getCell(4).value = `${ps.coveragePercent}%`;
+    row.getCell(5).value = ps.coveredAssets;
+    row.getCell(6).value = coverage.totalIIW;
+    row.commit();
+    r++;
+  }
+
+  // Uncovered assets section
+  if (coverage.uncoveredList && coverage.uncoveredList.length > 0) {
+    r += 1;
+    const secRow = sheet.getRow(r);
+    secRow.getCell(1).value = `IIW Assets Not Covered by Any Scanner (${coverage.uncoveredList.length})`;
+    secRow.getCell(1).font = { bold: true };
+    secRow.getCell(1).fill = sectionFill;
+    r++;
+
+    const uncHdr = sheet.getRow(r);
+    ['Unique Asset ID', 'IP Address', 'DNS Name', 'Asset Type'].forEach((h, i) => {
+      const cell = uncHdr.getCell(i + 1);
+      cell.value = h;
+      cell.font = hdrFont;
+      cell.fill = hdrFill;
+    });
+    r++;
+
+    for (const a of coverage.uncoveredList) {
+      const row = sheet.getRow(r);
+      row.getCell(1).value = a.uniqueAssetId || '';
+      row.getCell(2).value = a.ipAddress || '';
+      row.getCell(3).value = a.dnsName || '';
+      row.getCell(4).value = a.assetType || '';
+      row.commit();
+      r++;
+    }
+  }
+
+  // Column widths
+  sheet.getColumn(1).width = 40;
+  sheet.getColumn(2).width = 22;
+  sheet.getColumn(3).width = 18;
+  sheet.getColumn(4).width = 18;
+  sheet.getColumn(5).width = 18;
+  sheet.getColumn(6).width = 18;
 }
 
 module.exports = { exportRET };

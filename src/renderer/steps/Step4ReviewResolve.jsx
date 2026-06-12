@@ -5,6 +5,87 @@ import FlagIcon from '../components/FlagIcon';
 import ScannerBadge from '../components/ScannerBadge';
 
 const RISK_LABELS = ['Critical', 'High', 'Moderate', 'Low'];
+
+function CoveragePanel({ coverage }) {
+  const [showUncovered, setShowUncovered] = useState(false);
+  if (!coverage) return null;
+
+  const pctColor = (pct) =>
+    pct === 100 ? 'text-green-600' : pct >= 80 ? 'text-yellow-600' : 'text-red-600';
+
+  return (
+    <div className="mb-4 bg-white border rounded-lg shadow-sm overflow-hidden text-sm">
+      <div className="px-4 py-2 bg-gray-50 border-b flex items-center justify-between">
+        <h3 className="font-semibold text-gray-700">Scan Coverage Summary</h3>
+        <span className={`font-bold ${pctColor(coverage.coveragePercent)}`}>
+          {coverage.coveragePercent}% — {coverage.coveredAssets}/{coverage.totalIIW} IIW assets covered
+        </span>
+      </div>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-gray-500 border-b bg-gray-50">
+            <th className="px-3 py-2 font-medium">Scanner File</th>
+            <th className="px-3 py-2 font-medium">Type</th>
+            <th className="px-3 py-2 font-medium">Auth%</th>
+            <th className="px-3 py-2 font-medium">Coverage%</th>
+            <th className="px-3 py-2 font-medium">Assets Covered</th>
+          </tr>
+        </thead>
+        <tbody>
+          {coverage.perScanner.map((ps) => (
+            <tr key={ps.fileId} className="border-b last:border-0">
+              <td className="px-3 py-2 font-medium truncate max-w-[180px]" title={ps.fileName}>{ps.fileName}</td>
+              <td className="px-3 py-2 text-gray-500">{ps.scannerType || '—'}</td>
+              <td className="px-3 py-2">
+                {ps.authPercent !== null ? (
+                  <span className={`font-semibold ${pctColor(ps.authPercent)}`}>{ps.authPercent}%</span>
+                ) : <span className="text-gray-400">—</span>}
+              </td>
+              <td className="px-3 py-2">
+                <span className={`font-semibold ${pctColor(ps.coveragePercent)}`}>{ps.coveragePercent}%</span>
+              </td>
+              <td className="px-3 py-2 text-gray-600">{ps.coveredAssets} / {coverage.totalIIW}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {coverage.uncoveredList.length > 0 && (
+        <div className="border-t">
+          <button
+            onClick={() => setShowUncovered((v) => !v)}
+            className="w-full px-4 py-2 text-left text-xs text-orange-600 hover:bg-orange-50 font-medium"
+          >
+            {showUncovered ? '▲' : '▼'} {coverage.uncoveredList.length} IIW asset(s) not reached by any scanner
+          </button>
+          {showUncovered && (
+            <div className="max-h-48 overflow-y-auto border-t bg-orange-50 px-4 py-2">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-gray-600 border-b">
+                    <th className="text-left pb-1 pr-3">Asset ID</th>
+                    <th className="text-left pb-1 pr-3">IP</th>
+                    <th className="text-left pb-1 pr-3">DNS</th>
+                    <th className="text-left pb-1">Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coverage.uncoveredList.map((a, idx) => (
+                    <tr key={idx} className="border-b border-orange-100">
+                      <td className="py-0.5 pr-3 font-mono">{a.uniqueAssetId}</td>
+                      <td className="py-0.5 pr-3 text-gray-500">{a.ipAddress || '—'}</td>
+                      <td className="py-0.5 pr-3 text-gray-500">{a.dnsName || '—'}</td>
+                      <td className="py-0.5 text-gray-500">{a.assetType || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 const SCAN_TYPES = ['VULNERABILITY', 'CONFIG_FINDING'];
 const FLAG_FILTERS = ['all', 'unmatched', 'unauthenticated', 'clean'];
 
@@ -20,6 +101,7 @@ export default function Step4ReviewResolve() {
   const prevStep = useStore((s) => s.prevStep);
   const setFindings = useStore((s) => s.setFindings);
   const systemInfo = useStore((s) => s.systemInfo);
+  const coverage = useStore((s) => s.coverage);
 
   // Filters
   const [filterScanner, setFilterScanner] = useState('all');
@@ -213,6 +295,9 @@ export default function Step4ReviewResolve() {
           </p>
         </div>
       </div>
+
+      {/* Coverage panel — populated after IIW asset matching */}
+      <CoveragePanel coverage={coverage} />
 
       {/* Unauthenticated warning banner */}
       {unauthUnacked.length > 0 && (

@@ -6,6 +6,7 @@ export default function Step5Export() {
   const systemInfo = useStore((s) => s.systemInfo);
   const iiwAssets = useStore((s) => s.iiwAssets);
   const scanFiles = useStore((s) => s.scanFiles);
+  const coverage = useStore((s) => s.coverage);
   const unauthAcknowledged = useStore((s) => s.unauthAcknowledged);
   const getExportSummary = useStore((s) => s.getExportSummary);
   const setProgress = useStore((s) => s.setProgress);
@@ -63,6 +64,7 @@ export default function Step5Export() {
         findings: findings.filter((f) => f.original_risk_rating !== 'Informational'),
         iiwAssets,
         scanFiles,
+        coverage: coverage || null,
       };
 
       const result = await window.electronAPI.exportRET(sessionData, savePath);

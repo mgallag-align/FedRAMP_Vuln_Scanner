@@ -40,6 +40,10 @@ const useStore = create((set, get) => ({
       ),
     })),
 
+  // ── Coverage (computed post-match in Step 3 handleProceed) ──
+  coverage: null,
+  setCoverage: (data) => set({ coverage: data }),
+
   // ── Findings (CFOs) ──
   findings: [],
   setFindings: (findings) => set({ findings }),
@@ -209,6 +213,7 @@ const useStore = create((set, get) => ({
       iiwAssets: [],
       iiwParseError: null,
       scanFiles: [],
+      coverage: null,
       findings: [],
       unauthAcknowledged: new Set(),
       currentStep: 0,
