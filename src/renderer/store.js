@@ -99,6 +99,7 @@ const useStore = create((set, get) => ({
     );
     const rcdtFindings = findings.filter((f) => f.mark_as_rcdt);
     const unmatched = findings.filter((f) => f.iiw_match_status === 'UNMATCHED');
+    const ambiguous = findings.filter((f) => f.iiw_match_status === 'AMBIGUOUS');
     const unauthenticated = findings.filter((f) => f.is_authenticated === false);
     const unauthUnacknowledged = unauthenticated.filter(
       (f) => !state.unauthAcknowledged.has(f.cfo_id)
@@ -121,6 +122,7 @@ const useStore = create((set, get) => ({
       configCount: configFindings.length,
       rcdtCount: rcdtFindings.length,
       unmatchedCount: unmatched.length,
+      ambiguousCount: ambiguous.length,
       unauthCount: unauthenticated.length,
       unauthUnacknowledgedCount: unauthUnacknowledged.length,
       informationalExcluded,

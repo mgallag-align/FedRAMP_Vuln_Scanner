@@ -7,6 +7,12 @@ export default function FlagIcon({ status, isAuthenticated }) {
       <span className="flag-red" title="Asset ID not found in IIW" />
     );
   }
+  // Purple = ambiguous — matched multiple IIW assets, needs resolution
+  if (status === 'AMBIGUOUS') {
+    return (
+      <span className="flag-purple" title="Ambiguous — matched multiple IIW assets; resolve below" />
+    );
+  }
   // Orange = unauthenticated scan
   if (isAuthenticated === false) {
     return (

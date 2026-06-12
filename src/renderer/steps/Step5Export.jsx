@@ -127,6 +127,12 @@ export default function Step5Export() {
               <span className="font-bold text-red-600">{summary.unmatchedCount}</span>
             </div>
           )}
+          {summary.ambiguousCount > 0 && (
+            <div className="flex justify-between col-span-2">
+              <span className="text-purple-600">Ambiguous asset matches:</span>
+              <span className="font-bold text-purple-600">{summary.ambiguousCount}</span>
+            </div>
+          )}
           {summary.unauthUnacknowledgedCount > 0 && (
             <div className="flex justify-between col-span-2">
               <span className="text-orange-600">Unacknowledged unauthenticated:</span>

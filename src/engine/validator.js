@@ -54,6 +54,16 @@ function validateExport(sessionData) {
     });
   }
 
+  // V-04b: Ambiguous asset matches (warning — assessor should resolve)
+  const ambiguous = active.filter((f) => f.iiw_match_status === 'AMBIGUOUS');
+  if (ambiguous.length > 0) {
+    warnings.push({
+      code: 'V-04b',
+      severity: 'warning',
+      message: `${ambiguous.length} finding(s) matched multiple IIW assets (ambiguous). Resolve them in Step 4 by selecting the correct asset, or they will export with their original identifiers.`,
+    });
+  }
+
   // V-05: All unauthenticated warnings acknowledged (warning — allows override)
   const unauthUnacked = active.filter(
     (f) => f.is_authenticated === false && !ackSet.has(f.cfo_id)

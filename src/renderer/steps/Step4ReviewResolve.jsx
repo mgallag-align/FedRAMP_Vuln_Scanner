@@ -87,7 +87,7 @@ function CoveragePanel({ coverage }) {
   );
 }
 const SCAN_TYPES = ['VULNERABILITY', 'CONFIG_FINDING'];
-const FLAG_FILTERS = ['all', 'unmatched', 'unauthenticated', 'clean'];
+const FLAG_FILTERS = ['all', 'unmatched', 'ambiguous', 'unauthenticated', 'clean'];
 
 export default function Step4ReviewResolve() {
   const findings = useStore((s) => s.findings);
@@ -124,8 +124,14 @@ export default function Step4ReviewResolve() {
       if (filterRisk !== 'all' && f.original_risk_rating !== filterRisk) return false;
       if (filterScanType !== 'all' && f.scan_type !== filterScanType) return false;
       if (filterFlag === 'unmatched' && f.iiw_match_status !== 'UNMATCHED') return false;
+      if (filterFlag === 'ambiguous' && f.iiw_match_status !== 'AMBIGUOUS') return false;
       if (filterFlag === 'unauthenticated' && f.is_authenticated !== false) return false;
-      if (filterFlag === 'clean' && (f.iiw_match_status === 'UNMATCHED' || f.is_authenticated === false))
+      if (
+        filterFlag === 'clean' &&
+        (f.iiw_match_status === 'UNMATCHED' ||
+          f.iiw_match_status === 'AMBIGUOUS' ||
+          f.is_authenticated === false)
+      )
         return false;
       return true;
     });
@@ -152,6 +158,21 @@ export default function Step4ReviewResolve() {
     bulkUpdateFindings(Array.from(selected), { mark_as_rcdt: true });
     setSelected(new Set());
   }, [selected, bulkUpdateFindings]);
+
+  // Resolve an ambiguous match by picking one of the candidate IIW assets.
+  const resolveAmbiguous = useCallback(
+    (cfoId, candidate) => {
+      updateFinding(cfoId, {
+        asset_identifier: candidate.uniqueAssetId,
+        iiw_match_status: 'MATCHED',
+        is_authenticated: candidate.authenticatedScan,
+        _match_tier: 'manual',
+        _match_confidence: 'assessor-resolved',
+        _iiw_candidates: undefined,
+      });
+    },
+    [updateFinding]
+  );
 
   const bulkAckUnauth = useCallback(() => {
     const unauthIds = Array.from(selected).filter((id) => {
@@ -213,15 +234,35 @@ export default function Step4ReviewResolve() {
           <div className="w-36 flex-shrink-0 px-2 truncate">
             {scanFile && <ScannerBadge scannerType={scanFile.scannerType} />}
           </div>
-          {/* Asset ID — editable */}
+          {/* Asset ID — editable, or candidate picker when ambiguous */}
           <div className="w-44 flex-shrink-0 px-2">
-            <input
-              className="w-full text-xs border rounded px-1 py-0.5"
-              value={f.asset_identifier || ''}
-              onChange={(e) =>
-                updateFinding(f.cfo_id, { asset_identifier: e.target.value })
-              }
-            />
+            {f.iiw_match_status === 'AMBIGUOUS' && f._iiw_candidates ? (
+              <select
+                className="w-full text-xs border border-purple-400 rounded px-1 py-0.5 bg-purple-50"
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  const c = f._iiw_candidates.find((x) => x.uniqueAssetId === e.target.value);
+                  if (c) resolveAmbiguous(f.cfo_id, c);
+                }}
+              >
+                <option value="">Resolve ({f._iiw_candidates.length})…</option>
+                {f._iiw_candidates.map((c) => (
+                  <option key={c.uniqueAssetId} value={c.uniqueAssetId}>
+                    {c.uniqueAssetId}
+                    {c.ipAddress ? ` · ${c.ipAddress}` : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="w-full text-xs border rounded px-1 py-0.5"
+                value={f.asset_identifier || ''}
+                onChange={(e) =>
+                  updateFinding(f.cfo_id, { asset_identifier: e.target.value })
+                }
+              />
+            )}
           </div>
           {/* Weakness Name */}
           <div className="flex-1 px-2 truncate text-xs" title={f.weakness_name}>
@@ -282,7 +323,7 @@ export default function Step4ReviewResolve() {
         </div>
       );
     },
-    [filtered, selected, scanFiles, unauthAcknowledged, toggleSelect, updateFinding, acknowledgeUnauth]
+    [filtered, selected, scanFiles, unauthAcknowledged, toggleSelect, updateFinding, acknowledgeUnauth, resolveAmbiguous]
   );
 
   return (
