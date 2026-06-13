@@ -18,6 +18,52 @@ function mapCVSStoRisk(cvss) {
 }
 
 /**
+ * Normalize any severity/risk string to a FedRAMP risk rating.
+ * Handles: text labels (case-insensitive), numeric scanner scales (0-5),
+ * CVSS floats, and special values like "Untriaged" or "None".
+ */
+function normalizeSeverity(rawSeverity) {
+  if (rawSeverity === null || rawSeverity === undefined || rawSeverity === '') {
+    return 'Informational';
+  }
+  const s = String(rawSeverity).toLowerCase().trim();
+
+  // Text labels
+  switch (s) {
+    case 'critical': return 'Critical';
+    case 'high': return 'High';
+    case 'moderate':
+    case 'medium':
+    case 'med': return 'Moderate';
+    case 'low': return 'Low';
+    case 'informational':
+    case 'info':
+    case 'none':
+    case '0': return 'Informational';
+    // "Untriaged" — conservative assumption; assessor should review
+    case 'untriaged':
+    case 'needs review':
+    case 'pending': return 'Moderate';
+  }
+
+  // Pure single-digit integer (scanner severity scale: 1–5 or 1–4)
+  // Qualys: 5=Critical, 4=High, 3=Moderate, 2-1=Low
+  // Nessus: 4=Critical, 3=High, 2=Moderate, 1=Low
+  // Treat as Qualys-style since 5-level scales are more common in CSV exports
+  if (/^\d$/.test(s)) {
+    const n = parseInt(s, 10);
+    if (n >= 5) return 'Critical';
+    if (n === 4) return 'High';
+    if (n === 3) return 'Moderate';
+    if (n >= 1) return 'Low';
+    return 'Informational';
+  }
+
+  // CVSS score (float or value > 5)
+  return mapCVSStoRisk(s);
+}
+
+/**
  * Detect CSV format by inspecting headers.
  *
  * Section-aware: multi-section files (title block + blank gap + findings table)
@@ -61,18 +107,8 @@ function mapRowsToFindings(records, fileName, mapping, onProgress) {
   for (let i = 0; i < total; i++) {
     const row = records[i];
 
-    const rawSeverity = mapping.original_risk_rating ? row[mapping.original_risk_rating] || '' : '';
-    let severity = rawSeverity;
-    // Try to interpret severity
-    const sLower = rawSeverity.toLowerCase().trim();
-    if (['critical', 'high', 'moderate', 'medium', 'low', 'informational', 'info'].includes(sLower)) {
-      if (sLower === 'medium') severity = 'Moderate';
-      else if (sLower === 'info') severity = 'Informational';
-      else severity = sLower.charAt(0).toUpperCase() + sLower.slice(1);
-    } else {
-      // Try as CVSS
-      severity = mapCVSStoRisk(rawSeverity);
-    }
+    const rawSeverity = mapping.original_risk_rating ? row[mapping.original_risk_rating] : '';
+    const severity = normalizeSeverity(rawSeverity);
 
     const scanTypeRaw = mapping.scan_type ? (row[mapping.scan_type] || '').toLowerCase() : '';
     const scanType =

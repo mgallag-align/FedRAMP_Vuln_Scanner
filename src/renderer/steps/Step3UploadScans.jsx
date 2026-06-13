@@ -23,6 +23,7 @@ export default function Step3UploadScans() {
   const prevStep = useStore((s) => s.prevStep);
 
   const [mapperState, setMapperState] = useState(null); // { csvHeaders, filePath, fileName, fileId }
+  const [lastMapping, setLastMapping] = useState(null); // mapping from the most recent successful mapper session
   const [parseErrors, setParseErrors] = useState([]);
   const [failedFiles, setFailedFiles] = useState([]); // queue of hard parse failures → ParseErrorModal
   const [expandedAuthFile, setExpandedAuthFile] = useState(null); // fileId for expanded host details
@@ -117,6 +118,7 @@ export default function Step3UploadScans() {
   const handleMapperConfirm = useCallback(
     async (mapping) => {
       const { filePath, fileName, fileId } = mapperState;
+      setLastMapping(mapping); // remember for next file with similar columns
       setMapperState(null);
       setProgress({ message: `Parsing ${fileName} with mapping...`, percent: 0, visible: true });
 
@@ -566,6 +568,7 @@ export default function Step3UploadScans() {
       {mapperState && (
         <FieldMapperModal
           csvHeaders={mapperState.csvHeaders}
+          prevMapping={lastMapping}
           onConfirm={handleMapperConfirm}
           onCancel={() => setMapperState(null)}
         />
