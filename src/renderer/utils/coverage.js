@@ -71,9 +71,13 @@ export function computeCoverage(findings, iiwAssets, scanFiles) {
 
   // IIW assets not reached by any scanner
   const uncoveredList = iiwAssets
-    .filter((a) => !globalMatched.has(a.uniqueAssetId.toLowerCase().trim()))
+    .filter((a) => {
+      const id = (a.uniqueAssetId || '').toLowerCase().trim();
+      // Assets with no ID can't be cross-referenced — treat as uncovered.
+      return !id || !globalMatched.has(id);
+    })
     .map((a) => ({
-      uniqueAssetId: a.uniqueAssetId,
+      uniqueAssetId: a.uniqueAssetId || '',
       ipAddress: a.ipAddress || '',
       dnsName: a.dnsName || '',
       assetType: a.assetType || '',
