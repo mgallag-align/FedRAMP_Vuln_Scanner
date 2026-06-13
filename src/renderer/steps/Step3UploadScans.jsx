@@ -69,7 +69,9 @@ export default function Step3UploadScans() {
               ...prev,
               {
                 fileName: file.name,
-                error: `No findings detected in ${file.name}. Verify this is a complete scan output.`,
+                error:
+                  result.parseWarning ||
+                  `No findings detected in ${file.name}. Verify this is a complete scan output.`,
                 isWarning: true,
               },
             ]);

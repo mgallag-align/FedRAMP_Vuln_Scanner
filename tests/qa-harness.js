@@ -1,12 +1,15 @@
 /* eslint-disable */
-// Comprehensive QA harness — run with: node qa-harness.js
+// Comprehensive QA harness — run with: npm test  (node tests/qa-harness.js)
 // Tests pure engine logic, parsers, ESM renderer utils (via babel), and a full export round-trip.
+// This file lives in tests/; source paths resolve against the repo root (ROOT).
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const babel = require('@babel/core');
 const Module = require('module');
+
+const ROOT = path.join(__dirname, '..');
 
 // ── Tiny assert framework ──
 let pass = 0, fail = 0;
@@ -20,7 +23,7 @@ function section(t) { console.log('\n=== ' + t + ' ==='); }
 
 // ── Load an ESM file as CommonJS via babel ──
 function loadESM(relPath) {
-  const full = path.join(__dirname, relPath);
+  const full = path.join(ROOT, relPath);
   const src = fs.readFileSync(full, 'utf8');
   const { code } = babel.transformSync(src, {
     presets: [['@babel/preset-env', { targets: { node: 'current' } }]],
@@ -33,20 +36,21 @@ function loadESM(relPath) {
   return m.exports;
 }
 
-const { matchAssets } = require('./src/engine/matcher');
-const { classifyFindings } = require('./src/engine/classifier');
-const { validateExport } = require('./src/engine/validator');
-const { generateIds } = require('./src/engine/id-generator');
-const { mapRowsToFindings, detectCSVFormat } = require('./src/parsers/generic-csv');
-const { parseNessus } = require('./src/parsers/nessus');
-const { parseQualys } = require('./src/parsers/qualys');
-const { parseSCAP } = require('./src/parsers/scap');
-const { parseRapid7 } = require('./src/parsers/rapid7');
-const { parsePrisma } = require('./src/parsers/prisma');
-const { parseIIW } = require('./src/parsers/iiw');
-const { exportRET } = require('./src/export/ret-writer');
-const { mapCVSStoRisk, normalizeSeverity, RISK_ORDER } = require('./src/engine/severity');
-const { sortByRisk, consolidateByCVE } = require('./src/engine/consolidate');
+const { matchAssets } = require('../src/engine/matcher');
+const { classifyFindings } = require('../src/engine/classifier');
+const { validateExport } = require('../src/engine/validator');
+const { generateIds } = require('../src/engine/id-generator');
+const { mapRowsToFindings, detectCSVFormat } = require('../src/parsers/generic-csv');
+const { parseNessus } = require('../src/parsers/nessus');
+const { parseQualys } = require('../src/parsers/qualys');
+const { parseSCAP } = require('../src/parsers/scap');
+const { parseRapid7 } = require('../src/parsers/rapid7');
+const { parsePrisma } = require('../src/parsers/prisma');
+const { parseIIW } = require('../src/parsers/iiw');
+const { exportRET } = require('../src/export/ret-writer');
+const { detectAndParse } = require('../src/parsers/index');
+const { mapCVSStoRisk, normalizeSeverity, RISK_ORDER } = require('../src/engine/severity');
+const { sortByRisk, consolidateByCVE } = require('../src/engine/consolidate');
 const rescan = loadESM('src/renderer/utils/rescan.js');
 const coverage = loadESM('src/renderer/utils/coverage.js');
 
@@ -335,10 +339,11 @@ section('consolidate.js — id-generator & exporter group identically');
 // ═══════════════════════════════════════════════════════════════
 section('main-process modules load');
 {
-  const mods = ['./src/parsers/index','./src/parsers/nessus','./src/parsers/qualys','./src/parsers/scap',
-    './src/parsers/rapid7','./src/parsers/prisma','./src/parsers/generic-csv','./src/parsers/universal-parser',
-    './src/parsers/csv-sections','./src/parsers/iiw','./src/export/ret-writer','./src/engine/matcher',
-    './src/engine/classifier','./src/engine/validator','./src/engine/id-generator','./src/engine/normalizer'];
+  const mods = ['../src/parsers/index','../src/parsers/nessus','../src/parsers/qualys','../src/parsers/scap',
+    '../src/parsers/rapid7','../src/parsers/prisma','../src/parsers/generic-csv','../src/parsers/universal-parser',
+    '../src/parsers/csv-sections','../src/parsers/iiw','../src/export/ret-writer','../src/engine/matcher',
+    '../src/engine/classifier','../src/engine/validator','../src/engine/id-generator','../src/engine/normalizer',
+    '../src/engine/severity','../src/engine/consolidate'];
   let allOk = true;
   for (const m of mods) { try { require(m); } catch (e) { allOk = false; console.log('  ✗ load ' + m + ': ' + e.message); } }
   ok(allOk, 'all main-process modules load');
@@ -458,6 +463,19 @@ async function otherParserTests() {
   eq(prisma[0].original_risk_rating, 'Critical', 'prisma: severity critical');
   eq(prisma[0].weakness_source_identifier, 'CVE-2021-2', 'prisma: cve id');
   ok('compliance_result' in prisma[0], 'prisma: CFO has compliance fields');
+
+  // parseWarning: recognized format that yields 0 findings (SCAP all-pass)
+  const scapAllPass = `<?xml version="1.0"?><Benchmark id="b" title="CIS X">
+    <Group><Rule id="r1" severity="high"><title>t</title></Rule></Group>
+    <TestResult><rule-result idref="r1"><result>pass</result></rule-result></TestResult></Benchmark>`;
+  const warnRes = await detectAndParse(Buffer.from(scapAllPass), 'clean.xml');
+  eq(warnRes.findings.length, 0, 'parseWarning: SCAP all-pass → 0 findings');
+  ok(warnRes.parseWarning && warnRes.parseWarning.includes('SCAP'), 'parseWarning set for recognized-but-empty');
+  // Recognized format WITH findings → no parseWarning
+  const qOk = await detectAndParse(
+    Buffer.from(`<?xml version="1.0"?><SCAN><IP value="1.1.1.1"><VULNS><CAT><VULN><QID>1</QID><TITLE>t</TITLE><SEVERITY>4</SEVERITY></VULN></CAT></VULNS></IP></SCAN>`),
+    'q.xml');
+  ok(!qOk.parseWarning, 'no parseWarning when findings present');
 }
 
 (async () => {

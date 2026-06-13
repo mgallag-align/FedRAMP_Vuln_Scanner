@@ -4,7 +4,7 @@
   "description": "FedRAMP 3PAO Automated Vulnerability Scan Ingestion Tool — RET Workbook v2.5 Automation",
   "main": "src/main/main.js",
   "scripts": {
-    "test": "node qa-harness.js",
+    "test": "node tests/qa-harness.js",
     "start": "electron .",
     "dev": "concurrently \"webpack serve --config webpack.renderer.config.js\" \"wait-on http://localhost:9000 && electron .\"",
     "build:renderer": "webpack --config webpack.renderer.config.js --mode production",

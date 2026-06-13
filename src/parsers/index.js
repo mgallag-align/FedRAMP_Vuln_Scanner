@@ -28,16 +28,41 @@ function parseFailure(fileName, ext, err, friendly) {
 
 /**
  * Detect scanner type from file content and extension, then parse.
- * Returns { scannerType, findings[], authWarning, authDetails?, error?,
- *           errorDetail?, recoverable?, needsMapping?, csvHeaders? }
+ * Returns { scannerType, findings[], authWarning, authDetails?, parseWarning?,
+ *           error?, errorDetail?, recoverable?, needsMapping?, csvHeaders? }
  *
  * authWarning: true if scan auth status is unknown or any hosts were unauthenticated
  * authDetails: optional string with specifics (e.g., "3 of 10 hosts unauthenticated")
+ * parseWarning: set when a file was RECOGNIZED as a known scanner format but
+ *   yielded zero findings — distinguishes "structure not understood" from a
+ *   genuinely clean scan so the assessor doesn't silently lose data.
  *
  * Every parser invocation is wrapped so a malformed/truncated file yields a
  * structured failure (logged by the caller) instead of an unhandled throw.
  */
 async function detectAndParse(contentBuffer, fileName, onProgress) {
+  const result = await detectAndParseInner(contentBuffer, fileName, onProgress);
+
+  // Flag the recognized-but-empty case: a known scanner format that produced no
+  // findings. SCAP (all checks passed) and Prisma (no vulns) can be legitimately
+  // empty, so this is a warning, not an error.
+  if (
+    result &&
+    !result.error &&
+    !result.needsMapping &&
+    result.scannerType &&
+    Array.isArray(result.findings) &&
+    result.findings.length === 0
+  ) {
+    result.parseWarning =
+      `Recognized ${fileName} as ${result.scannerType}, but no findings were extracted. ` +
+      `This is expected for a fully clean scan; otherwise verify the file is complete and not filtered.`;
+  }
+
+  return result;
+}
+
+async function detectAndParseInner(contentBuffer, fileName, onProgress) {
   const ext = fileName.toLowerCase().split('.').pop();
 
   // ── .xlsx / .xls → tabular spreadsheets always go through the field mapper ──
