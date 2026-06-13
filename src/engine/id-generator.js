@@ -8,53 +8,12 @@
  *
  * Format: [PREFIX]-[NNN] (zero-padded 3-digit sequence)
  * Sequence resets per tab.
+ *
+ * The consolidation + sort are shared with the RET exporter (engine/consolidate)
+ * so IDs are assigned to exactly the same row groups the exporter writes.
  */
 
-const RISK_ORDER = { Critical: 0, High: 1, Moderate: 2, Low: 3, Informational: 4 };
-
-function sortFindings(findings) {
-  return [...findings].sort((a, b) => {
-    const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
-    const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
-    if (riskA !== riskB) return riskA - riskB;
-    return (a.weakness_name || '').localeCompare(b.weakness_name || '');
-  });
-}
-
-/**
- * Consolidate findings by weakness_source_identifier (CVE) within a group.
- * Findings without a CVE are kept as individual rows.
- * Returns consolidated array where each CVE appears once.
- */
-function consolidateGroup(findings) {
-  const grouped = new Map();
-  const noIdentifier = [];
-
-  for (const cfo of findings) {
-    const key = cfo.weakness_source_identifier;
-    if (!key) {
-      noIdentifier.push(cfo);
-      continue;
-    }
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
-    grouped.get(key).push(cfo);
-  }
-
-  const consolidated = [];
-  for (const [, group] of grouped) {
-    // Pick the highest-severity finding as representative
-    group.sort((a, b) => {
-      const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
-      const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
-      return riskA - riskB;
-    });
-    consolidated.push(group[0]);
-  }
-
-  return [...consolidated, ...noIdentifier];
-}
+const { sortByRisk, consolidateByCVE } = require('./consolidate');
 
 function generateIds(cfos, prefixConfig) {
   const { vulnPrefix = 'VS', configPrefix = 'CF', rcdtPrefix = 'RC' } = prefixConfig;
@@ -67,10 +26,10 @@ function generateIds(cfos, prefixConfig) {
   const configFindings = active.filter((f) => f.scan_type === 'CONFIG_FINDING' && !f.mark_as_rcdt);
   const rcdtFindings = active.filter((f) => f.mark_as_rcdt);
 
-  // Consolidate by CVE then sort each group
-  const sortedRET = sortFindings(consolidateGroup(retFindings));
-  const sortedConfig = sortFindings(consolidateGroup(configFindings));
-  const sortedRCDT = sortFindings(consolidateGroup(rcdtFindings));
+  // Consolidate by CVE then sort each group (same logic the exporter uses)
+  const sortedRET = sortByRisk(consolidateByCVE(retFindings));
+  const sortedConfig = sortByRisk(consolidateByCVE(configFindings));
+  const sortedRCDT = sortByRisk(consolidateByCVE(rcdtFindings));
 
   // Assign IDs — one per consolidated CVE
   const idMap = new Map();

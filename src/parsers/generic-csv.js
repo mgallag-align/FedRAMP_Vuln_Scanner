@@ -1,67 +1,9 @@
 const { v4: uuidv4 } = require('uuid');
 const { parseCSVSections } = require('./csv-sections');
+const { normalizeSeverity } = require('../engine/severity');
 
 // Known Rapid7 CSV header patterns
 const RAPID7_HEADERS = ['asset ip address', 'vulnerability title'];
-
-/**
- * CVSS score → FedRAMP risk rating
- */
-function mapCVSStoRisk(cvss) {
-  const score = parseFloat(cvss);
-  if (isNaN(score)) return 'Informational';
-  if (score >= 9.0) return 'Critical';
-  if (score >= 7.0) return 'High';
-  if (score >= 4.0) return 'Moderate';
-  if (score > 0) return 'Low';
-  return 'Informational';
-}
-
-/**
- * Normalize any severity/risk string to a FedRAMP risk rating.
- * Handles: text labels (case-insensitive), numeric scanner scales (0-5),
- * CVSS floats, and special values like "Untriaged" or "None".
- */
-function normalizeSeverity(rawSeverity) {
-  if (rawSeverity === null || rawSeverity === undefined || rawSeverity === '') {
-    return 'Informational';
-  }
-  const s = String(rawSeverity).toLowerCase().trim();
-
-  // Text labels
-  switch (s) {
-    case 'critical': return 'Critical';
-    case 'high': return 'High';
-    case 'moderate':
-    case 'medium':
-    case 'med': return 'Moderate';
-    case 'low': return 'Low';
-    case 'informational':
-    case 'info':
-    case 'none':
-    case '0': return 'Informational';
-    // "Untriaged" — conservative assumption; assessor should review
-    case 'untriaged':
-    case 'needs review':
-    case 'pending': return 'Moderate';
-  }
-
-  // Pure single-digit integer (scanner severity scale: 1–5 or 1–4)
-  // Qualys: 5=Critical, 4=High, 3=Moderate, 2-1=Low
-  // Nessus: 4=Critical, 3=High, 2=Moderate, 1=Low
-  // Treat as Qualys-style since 5-level scales are more common in CSV exports
-  if (/^\d$/.test(s)) {
-    const n = parseInt(s, 10);
-    if (n >= 5) return 'Critical';
-    if (n === 4) return 'High';
-    if (n === 3) return 'Moderate';
-    if (n >= 1) return 'Low';
-    return 'Informational';
-  }
-
-  // CVSS score (float or value > 5)
-  return mapCVSStoRisk(s);
-}
 
 /**
  * Detect CSV format by inspecting headers.

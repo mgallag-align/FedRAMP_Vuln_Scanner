@@ -1,8 +1,7 @@
 const ExcelJS = require('exceljs');
 const path = require('path');
 const { classifyFindings } = require('../engine/classifier');
-
-const RISK_ORDER = { Critical: 0, High: 1, Moderate: 2, Low: 3 };
+const { sortByRisk, consolidateByCVE } = require('../engine/consolidate');
 
 /**
  * Export populated RET XLSX workbook.
@@ -404,110 +403,6 @@ function writeRCDTRow(sheet, rowNum, cfo, systemInfo, detectorTypeMap) {
 // ═══════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════
-
-function sortByRisk(findings) {
-  return [...findings].sort((a, b) => {
-    const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
-    const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
-    if (riskA !== riskB) return riskA - riskB;
-    return (a.weakness_name || '').localeCompare(b.weakness_name || '');
-  });
-}
-
-/**
- * Consolidate findings so there is one row per CVE/weakness_source_identifier.
- * All affected asset identifiers are merged into a single newline-separated string.
- * When multiple findings share the same CVE, the consolidated row uses:
- *   - Highest severity (Critical > High > Moderate > Low)
- *   - Earliest detection date
- *   - Combined asset identifiers (deduplicated, newline-separated)
- *   - First non-empty value for other fields (weakness_name, description, etc.)
- *
- * Findings without a weakness_source_identifier are passed through as-is (one row each).
- */
-function consolidateByCVE(findings) {
-  const grouped = new Map();
-  const noIdentifier = [];
-
-  for (const cfo of findings) {
-    const key = cfo.weakness_source_identifier;
-    if (!key) {
-      noIdentifier.push(cfo);
-      continue;
-    }
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
-    grouped.get(key).push(cfo);
-  }
-
-  const consolidated = [];
-
-  for (const [, group] of grouped) {
-    // Start with the highest-severity finding as the base
-    group.sort((a, b) => {
-      const riskA = RISK_ORDER[a.original_risk_rating] ?? 4;
-      const riskB = RISK_ORDER[b.original_risk_rating] ?? 4;
-      return riskA - riskB;
-    });
-    const base = { ...group[0] };
-
-    // Merge asset identifiers (deduplicated)
-    const assetSet = new Set();
-    for (const cfo of group) {
-      if (cfo.asset_identifier) {
-        // Split in case an asset_identifier already contains multiple values
-        cfo.asset_identifier.split('\n').forEach((a) => {
-          const trimmed = a.trim();
-          if (trimmed) assetSet.add(trimmed);
-        });
-      }
-    }
-    base.asset_identifier = Array.from(assetSet).join('\n');
-
-    // Use earliest detection date
-    let earliest = null;
-    for (const cfo of group) {
-      if (cfo.original_detection_date) {
-        const d = new Date(cfo.original_detection_date);
-        if (!isNaN(d.getTime()) && (!earliest || d < earliest)) {
-          earliest = d;
-        }
-      }
-    }
-    if (earliest) {
-      base.original_detection_date = earliest.toISOString().split('T')[0];
-    }
-
-    // Merge scanner sources (deduplicated)
-    const scannerSet = new Set();
-    for (const cfo of group) {
-      if (cfo.scanner_source) scannerSet.add(cfo.scanner_source);
-    }
-    if (scannerSet.size > 1) {
-      base.scanner_source = Array.from(scannerSet).join('; ');
-    }
-
-    // Fill in any blank fields from other group members
-    for (const field of ['weakness_name', 'weakness_description', 'vendor_name']) {
-      if (!base[field]) {
-        for (const cfo of group) {
-          if (cfo[field]) {
-            base[field] = cfo[field];
-            break;
-          }
-        }
-      }
-    }
-
-    // Vendor dependency: true if any finding says true
-    base.vendor_dependency = group.some((cfo) => cfo.vendor_dependency);
-
-    consolidated.push(base);
-  }
-
-  return [...consolidated, ...noIdentifier];
-}
 
 /**
  * Extract just the scanner product name from scanner_source.

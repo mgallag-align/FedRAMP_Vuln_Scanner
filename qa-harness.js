@@ -39,7 +39,14 @@ const { validateExport } = require('./src/engine/validator');
 const { generateIds } = require('./src/engine/id-generator');
 const { mapRowsToFindings, detectCSVFormat } = require('./src/parsers/generic-csv');
 const { parseNessus } = require('./src/parsers/nessus');
+const { parseQualys } = require('./src/parsers/qualys');
+const { parseSCAP } = require('./src/parsers/scap');
+const { parseRapid7 } = require('./src/parsers/rapid7');
+const { parsePrisma } = require('./src/parsers/prisma');
+const { parseIIW } = require('./src/parsers/iiw');
 const { exportRET } = require('./src/export/ret-writer');
+const { mapCVSStoRisk, normalizeSeverity, RISK_ORDER } = require('./src/engine/severity');
+const { sortByRisk, consolidateByCVE } = require('./src/engine/consolidate');
 const rescan = loadESM('src/renderer/utils/rescan.js');
 const coverage = loadESM('src/renderer/utils/coverage.js');
 
@@ -284,6 +291,48 @@ async function exportTests() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+section('severity.js — shared mappers');
+{
+  eq(mapCVSStoRisk('9.8'), 'Critical', 'CVSS 9.8 → Critical');
+  eq(mapCVSStoRisk('0'), 'Informational', 'CVSS 0 → Informational');
+  eq(mapCVSStoRisk('abc'), 'Informational', 'CVSS NaN → Informational');
+  eq(normalizeSeverity('Untriaged'), 'Moderate', 'normalizeSeverity Untriaged');
+  eq(normalizeSeverity('5'), 'Critical', 'normalizeSeverity numeric 5');
+  eq(RISK_ORDER.Critical, 0, 'RISK_ORDER Critical=0');
+  // generic-csv must use the shared normalizer (same result through both paths)
+  const viaCsv = mapRowsToFindings([{ a:'h', w:'x', s:'Untriaged' }], 'f', { asset_identifier:'a', weakness_name:'w', original_risk_rating:'s' })[0];
+  eq(viaCsv.original_risk_rating, 'Moderate', 'generic-csv routes through shared normalizeSeverity');
+}
+
+// ═══════════════════════════════════════════════════════════════
+section('consolidate.js — id-generator & exporter group identically');
+{
+  // Two findings, same CVE, different assets → ONE consolidated row.
+  const findings = [
+    cfo({ cfo_id:'a', weakness_source_identifier:'CVE-9', asset_identifier:'h1', original_risk_rating:'Moderate' }),
+    cfo({ cfo_id:'b', weakness_source_identifier:'CVE-9', asset_identifier:'h2', original_risk_rating:'Critical' }),
+    cfo({ cfo_id:'c', weakness_source_identifier:'CVE-8', asset_identifier:'h3', original_risk_rating:'Low' }),
+  ];
+  const consolidated = consolidateByCVE(findings);
+  eq(consolidated.length, 2, 'two CVEs → two consolidated rows');
+  const cve9 = consolidated.find(f => f.weakness_source_identifier === 'CVE-9');
+  eq(cve9.original_risk_rating, 'Critical', 'consolidated row takes highest severity');
+  ok(cve9.asset_identifier.includes('h1') && cve9.asset_identifier.includes('h2'), 'assets merged');
+
+  // Parity: every CVE that the exporter consolidates must receive exactly one
+  // ID from the generator, and all findings of that CVE share it.
+  const withIds = generateIds(findings, { vulnPrefix:'VS', configPrefix:'CF', rcdtPrefix:'RC' });
+  const idA = withIds.find(f => f.cfo_id === 'a').ret_id;
+  const idB = withIds.find(f => f.cfo_id === 'b').ret_id;
+  ok(idA && idA === idB, 'same-CVE findings share one RET ID (generator↔exporter parity)');
+  const idC = withIds.find(f => f.cfo_id === 'c').ret_id;
+  ok(idC && idC !== idA, 'different CVE gets a different ID');
+  // Critical CVE-9 sorts before Low CVE-8 → VS-001 vs VS-002
+  eq(idA, 'VS-001', 'highest-severity CVE gets VS-001');
+  eq(idC, 'VS-002', 'lower-severity CVE gets VS-002');
+}
+
+// ═══════════════════════════════════════════════════════════════
 section('main-process modules load');
 {
   const mods = ['./src/parsers/index','./src/parsers/nessus','./src/parsers/qualys','./src/parsers/scap',
@@ -295,9 +344,127 @@ section('main-process modules load');
   ok(allOk, 'all main-process modules load');
 }
 
+// ═══════════════════════════════════════════════════════════════
+section('iiw.js — header detection & robustness (async)');
+async function iiwTests() {
+  const ExcelJS = require('exceljs');
+
+  // Build an IIW with columns in NON-legacy positions and an extra guidance row,
+  // to prove header-detection resolves columns by label, not by fixed position.
+  async function buildIIW(rows, headerAt = 3) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Inventory');
+    ws.getRow(1).getCell(1).value = 'FedRAMP Integrated Inventory Workbook';
+    ws.getRow(2).getCell(1).value = 'Guidance row';
+    // Header row at headerAt — columns deliberately at A/B/C/D/E (not B/C/F/I/M)
+    const hdr = ws.getRow(headerAt);
+    hdr.getCell(1).value = 'Unique Asset Identifier';
+    hdr.getCell(2).value = 'IPv4 or IPv6 Address';
+    hdr.getCell(3).value = 'DNS Name or URL';
+    hdr.getCell(4).value = 'Authenticated Scan';
+    hdr.getCell(5).value = 'Asset Type';
+    rows.forEach((r, i) => {
+      const row = ws.getRow(headerAt + 1 + i);
+      row.getCell(1).value = r.id;
+      row.getCell(2).value = r.ip;
+      row.getCell(3).value = r.dns;
+      row.getCell(4).value = r.auth;
+      row.getCell(5).value = r.type;
+    });
+    const tmp = path.join(os.tmpdir(), `qa-iiw-${Date.now()}-${Math.random().toString(36).slice(2)}.xlsx`);
+    await wb.xlsx.writeFile(tmp);
+    return tmp;
+  }
+
+  const f1 = await buildIIW([
+    { id: 'WEB-01', ip: '10.1.1.1', dns: 'web01.example.com', auth: 'Yes', type: 'Server' },
+    { id: 'DB-01', ip: '10.1.1.2', dns: 'db01.example.com', auth: 'No', type: 'Database' },
+  ]);
+  let res = await parseIIW(f1);
+  eq(res.assets.length, 2, 'IIW: parsed 2 assets from non-legacy column layout');
+  eq(res.assets[0].uniqueAssetId, 'WEB-01', 'IIW: correct asset id by header');
+  eq(res.assets[0].ipAddress, '10.1.1.1', 'IIW: correct IP by header (not fixed col C)');
+  eq(res.assets[0].authenticatedScan, true, 'IIW: auth Yes→true by header (not fixed col I)');
+  eq(res.assets[1].authenticatedScan, false, 'IIW: auth No→false');
+  eq(res.assets[0].assetType, 'Server', 'IIW: asset type by header');
+  fs.unlinkSync(f1);
+
+  // Duplicate id → warned + first wins
+  const f2 = await buildIIW([
+    { id: 'DUP', ip: '1.1.1.1', dns: '', auth: 'Yes', type: '' },
+    { id: 'dup', ip: '2.2.2.2', dns: '', auth: 'No', type: '' },
+  ]);
+  res = await parseIIW(f2);
+  eq(res.assets.length, 1, 'IIW: duplicate id collapsed to 1');
+  ok(res.warnings.some(w => w.includes('Duplicate')), 'IIW: duplicate warning emitted');
+  fs.unlinkSync(f2);
+
+  // No recognizable header → legacy fallback with warning
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Inventory');
+  for (let r = 1; r <= 5; r++) ws.getRow(r).getCell(1).value = `meta ${r}`;
+  ws.getRow(6).getCell(2).value = 'LEGACY-01'; // col B
+  ws.getRow(6).getCell(3).value = '10.0.0.9';  // col C
+  ws.getRow(6).getCell(9).value = 'Yes';       // col I
+  const f3 = path.join(os.tmpdir(), `qa-iiw-legacy-${Date.now()}.xlsx`);
+  await wb.xlsx.writeFile(f3);
+  res = await parseIIW(f3);
+  eq(res.assets.length, 1, 'IIW: legacy fallback parses col B/C/I');
+  eq(res.assets[0].uniqueAssetId, 'LEGACY-01', 'IIW: legacy fallback reads col B');
+  ok(res.warnings.some(w => w.toLowerCase().includes('legacy')), 'IIW: legacy fallback warning');
+  fs.unlinkSync(f3);
+}
+
+// ═══════════════════════════════════════════════════════════════
+section('other parsers — qualys / scap / rapid7 / prisma (async)');
+async function otherParserTests() {
+  // Qualys
+  const qualysXml = `<?xml version="1.0"?><SCAN><IP value="10.0.0.5" name="h">
+    <VULNS><CAT><VULN><QID>38173</QID><TITLE>SSL Weak</TITLE><SEVERITY>4</SEVERITY><DIAGNOSIS>weak</DIAGNOSIS></VULN></CAT></VULNS>
+    </IP></SCAN>`;
+  let r = await parseQualys(qualysXml, 'q.xml');
+  eq(r.findings.length, 1, 'qualys: 1 finding');
+  eq(r.findings[0].original_risk_rating, 'High', 'qualys: severity 4 → High');
+  eq(r.findings[0].weakness_source_identifier, 'QID-38173', 'qualys: QID id');
+  ok('compliance_result' in r.findings[0], 'qualys: CFO has compliance fields');
+
+  // SCAP/XCCDF — only failed rules become findings
+  const scapXml = `<?xml version="1.0"?><Benchmark id="xccdf_bench" title="CIS RHEL8">
+    <Group><Rule id="rule-1" severity="high"><title>Disable telnet</title><description>desc</description></Rule></Group>
+    <TestResult><rule-result idref="rule-1"><result>fail</result></rule-result>
+    <rule-result idref="rule-2"><result>pass</result></rule-result></TestResult></Benchmark>`;
+  const scap = await parseSCAP(scapXml, 's.xml');
+  eq(scap.length, 1, 'scap: only failed rule becomes a finding');
+  eq(scap[0].scan_type, 'CONFIG_FINDING', 'scap: CONFIG_FINDING');
+  eq(scap[0].original_risk_rating, 'High', 'scap: severity high');
+  eq(scap[0].hardening_benchmark, 'CIS RHEL8', 'scap: benchmark title captured');
+  ok(scap[0].compliance_result, 'scap: compliance_result set');
+
+  // Rapid7 CSV (public API: parseRapid7 with format='csv')
+  const r7res = await parseRapid7(
+    'Asset IP Address,Vulnerability Title,CVSS Score,Vulnerability ID\n10.0.0.7,Old OpenSSH,7.5,CVE-2020-1\n',
+    'r7.csv', null, 'csv');
+  const r7 = r7res.findings;
+  eq(r7.length, 1, 'rapid7: 1 finding');
+  eq(r7[0].original_risk_rating, 'High', 'rapid7: CVSS 7.5 → High (shared mapper)');
+  eq(r7[0].asset_identifier, '10.0.0.7', 'rapid7: asset ip');
+  ok('compliance_result' in r7[0], 'rapid7: CFO has compliance fields');
+
+  // Prisma JSON
+  const prisma = await parsePrisma(
+    { results: [{ id: 'img:1', vulnerabilities: [{ cve: 'CVE-2021-2', severity: 'critical', description: 'd', title: 'pkg flaw' }] }] },
+    'p.json');
+  eq(prisma.length, 1, 'prisma: 1 finding');
+  eq(prisma[0].original_risk_rating, 'Critical', 'prisma: severity critical');
+  eq(prisma[0].weakness_source_identifier, 'CVE-2021-2', 'prisma: cve id');
+  ok('compliance_result' in prisma[0], 'prisma: CFO has compliance fields');
+}
+
 (async () => {
   try { await nessusTests(); } catch (e) { fail++; failures.push('nessus threw: ' + e.message); console.log(e); }
   try { await exportTests(); } catch (e) { fail++; failures.push('export threw: ' + e.message); console.log(e); }
+  try { await iiwTests(); } catch (e) { fail++; failures.push('iiw threw: ' + e.message); console.log(e); }
+  try { await otherParserTests(); } catch (e) { fail++; failures.push('other-parsers threw: ' + e.message); console.log(e); }
   console.log(`\n${'='.repeat(50)}\nRESULTS: ${pass} passed, ${fail} failed`);
   if (fail > 0) { console.log('FAILURES:\n  - ' + failures.join('\n  - ')); process.exit(1); }
   else console.log('ALL TESTS PASSED ✓');

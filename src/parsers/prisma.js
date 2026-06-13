@@ -1,17 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
-
-/**
- * CVSS score → FedRAMP risk rating
- */
-function mapCVSStoRisk(cvss) {
-  const score = parseFloat(cvss);
-  if (isNaN(score)) return 'Informational';
-  if (score >= 9.0) return 'Critical';
-  if (score >= 7.0) return 'High';
-  if (score >= 4.0) return 'Moderate';
-  if (score > 0) return 'Low';
-  return 'Informational';
-}
+const { mapCVSStoRisk } = require('../engine/severity');
 
 /**
  * Map Prisma Cloud / Twistlock severity string to FedRAMP rating

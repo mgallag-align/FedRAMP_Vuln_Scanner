@@ -1,19 +1,7 @@
 const xml2js = require('xml2js');
 const { parse: csvParse } = require('csv-parse/sync');
 const { v4: uuidv4 } = require('uuid');
-
-/**
- * CVSS v3 score → FedRAMP risk rating
- */
-function mapCVSStoRisk(cvss) {
-  const score = parseFloat(cvss);
-  if (isNaN(score)) return 'Informational';
-  if (score >= 9.0) return 'Critical';
-  if (score >= 7.0) return 'High';
-  if (score >= 4.0) return 'Moderate';
-  if (score > 0) return 'Low';
-  return 'Informational';
-}
+const { mapCVSStoRisk } = require('../engine/severity');
 
 /**
  * Parse Rapid7 InsightVM CSV export into CFOs.
@@ -241,6 +229,9 @@ async function parseRapid7XML(xmlContent, fileName, onProgress) {
         vendor_dependency: false,
         vendor_name: '',
         hardening_benchmark: '',
+        compliance_result: null,
+        compliance_actual_value: '',
+        compliance_policy_value: '',
         assessor_comments: '',
         ret_id: null,
         mark_as_rcdt: false,
