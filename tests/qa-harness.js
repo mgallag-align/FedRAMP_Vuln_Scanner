@@ -41,6 +41,7 @@ const { classifyFindings } = require('../src/engine/classifier');
 const { validateExport } = require('../src/engine/validator');
 const { generateIds } = require('../src/engine/id-generator');
 const { mapRowsToFindings, detectCSVFormat } = require('../src/parsers/generic-csv');
+const { selectBestSection, scoreHeader } = require('../src/parsers/csv-sections');
 const { parseNessus } = require('../src/parsers/nessus');
 const { parseQualys } = require('../src/parsers/qualys');
 const { parseSCAP } = require('../src/parsers/scap');
@@ -476,6 +477,54 @@ async function otherParserTests() {
     Buffer.from(`<?xml version="1.0"?><SCAN><IP value="1.1.1.1"><VULNS><CAT><VULN><QID>1</QID><TITLE>t</TITLE><SEVERITY>4</SEVERITY></VULN></CAT></VULNS></IP></SCAN>`),
     'q.xml');
   ok(!qOk.parseWarning, 'no parseWarning when findings present');
+}
+
+// ═══════════════════════════════════════════════════════════════
+section('csv-sections.js — header detection does not grab random data rows as headers');
+{
+  // Regression for a bug where a data row's long free-text cell (e.g. a
+  // Nessus plugin description/registry-artifact synopsis) accidentally
+  // contained header keyword *substrings* ("port" inside "supports",
+  // "rating" inside "generating", etc.) and outscored the real header row,
+  // so the field-mapper dropdown showed row values instead of column names.
+  const longDescriptionRow = [
+    '92424', 'None', 'MSTRWINSTN06:tcp', '0', 'MUICache Program Execution History',
+    'Nessus was able to enumerate recently executed programs and report on them, ' +
+      'generating a synopsis of file access activity supporting forensic analysis',
+    'Nessus was able to query the MUICache registry artifact for this host',
+    'n/a', 'https://forensicartifacts.com/2010/08/registry-artifacts',
+    '@%systemroot%\\system32\\drivers\\wdpupfltr.sys',
+  ];
+  const realHeaderRow = [
+    'Plugin ID', 'CVE', 'CVSS', 'Risk', 'Host', 'Protocol', 'Port', 'Name',
+    'Synopsis', 'Description', 'Solution',
+  ];
+  const dataRow2 = [
+    '92425', '', 'MSTRWINSTN06:tcp', '0', 'Nessus Scan Information',
+    'This plugin displays information about the Nessus scan', '', 'n/a', '', '',
+  ];
+
+  ok(
+    scoreHeader(realHeaderRow) > scoreHeader(longDescriptionRow),
+    'real header row outscores a long-prose data row'
+  );
+
+  const rawRows = [realHeaderRow, longDescriptionRow, dataRow2];
+  const { headers } = selectBestSection(rawRows);
+  eq(headers[0], 'Plugin ID', 'selectBestSection: picks the real header row, not the data row');
+  ok(
+    !headers.includes('92424') && !headers.some((h) => h.includes('Nessus was able to enumerate')),
+    'selectBestSection: header list does not contain row-value text'
+  );
+
+  // A long prose cell containing a bare keyword substring must not count —
+  // only whole-word matches on short, label-like cells should score.
+  eq(
+    scoreHeader(['Supporting evidence for the generating report on operations']),
+    0,
+    'scoreHeader: long free-text cell scores 0 even though it contains "port"/"rating"/"report" as substrings'
+  );
+  eq(scoreHeader(['Port', 'Protocol', 'Status']), 3, 'scoreHeader: short header-like cells still match on whole words');
 }
 
 (async () => {

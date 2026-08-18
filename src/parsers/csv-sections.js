@@ -69,15 +69,64 @@ function makeUniqueHeaders(rawHeaders) {
   });
 }
 
+// Header label cells are short (column names). Data/prose cells — plugin
+// output, descriptions, registry paths — can run to hundreds of characters
+// and are excluded from keyword scoring below so they can never be mistaken
+// for a header row just because a keyword happens to appear in the text.
+const HEADER_CELL_MAX_LEN = 40;
+
+/**
+ * Split a string into lowercase alphanumeric tokens on any non-alphanumeric
+ * boundary, e.g. "Plugin ID" -> ["plugin", "id"], "MSTRWINSTN06:tcp" ->
+ * ["mstrwinstn06", "tcp"].
+ */
+function tokenize(str) {
+  return String(str)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * True when a (short, header-candidate) cell matches a keyword as whole
+ * word(s) rather than a raw substring. Whole-word matching is essential:
+ * naive substring checks make short keywords like "port", "type", or "risk"
+ * match constantly inside unrelated words — "support", "prototype",
+ * "asterisk" — which is exactly what let data rows outscore real header
+ * rows in files with long free-text cells.
+ */
+function cellMatchesKeyword(cellTokens, kw) {
+  const kwTokens = kw.split(' ');
+  if (kwTokens.length === 1) {
+    return cellTokens.includes(kwTokens[0]);
+  }
+  // Multi-word keyword (e.g. "first found"): require the tokens to appear
+  // as a consecutive run, in order.
+  for (let i = 0; i + kwTokens.length <= cellTokens.length; i++) {
+    if (kwTokens.every((t, j) => cellTokens[i + j] === t)) return true;
+  }
+  return false;
+}
+
 /**
  * Score a header row by how many finding-related keywords it contains.
  * Higher = more likely to be the real findings table header.
+ *
+ * Only short, label-like cells are considered (see HEADER_CELL_MAX_LEN) and
+ * matches are whole-word, so long free-text data cells can't accidentally
+ * "look like" a header just because a keyword substring shows up in prose.
  */
 function scoreHeader(headers) {
-  const lower = headers.map((h) => h.toLowerCase().trim());
+  const candidateCells = headers
+    .map((h) => String(h == null ? '' : h).trim())
+    .filter((cell) => cell.length > 0 && cell.length <= HEADER_CELL_MAX_LEN)
+    .map((cell) => ({ cell, tokens: tokenize(cell) }));
+
   let score = 0;
   for (const kw of FINDING_HEADER_KEYWORDS) {
-    if (lower.some((h) => h === kw || h.includes(kw))) score += 1;
+    if (candidateCells.some(({ tokens }) => cellMatchesKeyword(tokens, kw))) {
+      score += 1;
+    }
   }
   return score;
 }
